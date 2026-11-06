@@ -104,7 +104,9 @@ class Manager:
     def mirror_desktop(self):
         try:
             jobs = json.loads((core.STATE/'jobs.json').read_text())
-            active = next((j for j in jobs if j['status'] in ('estrazione','compressione','analisi')),None)
+            active = next((j for j in jobs if j['status'] == 'estrazione'),None)
+            encoding = next((j for j in jobs if j['status'] == 'compressione'),None)
+            active = active or encoding or next((j for j in jobs if j['status'] == 'analisi'),None)
             if not active:
                 self.set('Desktop attivo', 'Il programma desktop è aperto. Chiudilo per usare il controllo web.')
                 return
@@ -114,7 +116,9 @@ class Manager:
                 size = max((p.stat().st_size for p in folder.glob('*.mkv')),default=0)
                 expected = int(active.get('expected_bytes') or 0)
                 percent = min(99, size/expected*100) if expected else 0
-                self.set('Estrazione desktop', name+' · '+f'{size/2**30:.1f} GiB scritti',percent,job={'name':name})
+                detail = name+' · '+f'{size/2**30:.1f} GiB scritti'
+                if encoding: detail += ' · In parallelo: compressione di '+encoding['name']
+                self.set('Estrazione desktop', detail,percent,job={'name':name})
             elif active['status'] == 'compressione':
                 logfile = Path(active['folder'])/'compressione.log'
                 tail = logfile.read_bytes()[-5000:].decode(errors='replace') if logfile.exists() else ''
