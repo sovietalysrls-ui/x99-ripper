@@ -1,0 +1,15 @@
+{
+  "name": "DiscFlow · Film",
+  "short_name": "DiscFlow",
+  "description": "Catalogo dei film completati sull’OptiPlex",
+  "lang": "it",
+  "start_url": "/ripper/films",
+  "scope": "/ripper/",
+  "display": "standalone",
+  "background_color": "#f4f6f3",
+  "theme_color": "#176b69",
+  "icons": [
+    {"src": "/ripper/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/ripper/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

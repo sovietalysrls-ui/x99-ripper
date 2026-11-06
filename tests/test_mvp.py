@@ -53,6 +53,12 @@ class QueueTests(unittest.TestCase):
                 base = f'http://127.0.0.1:{server.server_port}/ripper/films'
                 page = urllib.request.urlopen(base, timeout=2).read().decode()
                 self.assertIn('Film completati', page)
+                manifest = json.load(urllib.request.urlopen('http://127.0.0.1:' +
+                    str(server.server_port) + '/ripper/manifest.webmanifest', timeout=2))
+                self.assertEqual(manifest['start_url'], '/ripper/films')
+                icon = urllib.request.urlopen('http://127.0.0.1:' +
+                    str(server.server_port) + '/ripper/icon-192.png', timeout=2).read()
+                self.assertTrue(icon.startswith(b'\x89PNG'))
                 listing = json.load(urllib.request.urlopen(base + '/data', timeout=2))
                 self.assertEqual([item['filename'] for item in listing], [final.name])
                 link = base + '/file?path=' + urllib.parse.quote('Film/Film & altro_H265.mkv')

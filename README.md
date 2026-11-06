@@ -1,4 +1,4 @@
-# DiscFlow 0.11.0 · coda DVD, catalogo e lettore esterno
+# DiscFlow 0.12.0 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -22,9 +22,20 @@ Per abilitare l'apertura con un clic su un PC Linux con Tailscale:
 
 Sull'OptiPlex configura `X99_RIPPER_TAILSCALE_HOST` con il suo IP Tailscale e
 riavvia solo il servizio web DiscFlow. Su quell'interfaccia il servizio
-accetta soltanto URL del film firmati e a scadenza. La vecchia copia MP4
-eventualmente già preparata resta conservata; la nuova interfaccia non ne
-crea altre.
+accetta soltanto URL del film firmati e a scadenza.
+
+### App Android e visione nel browser
+
+Il catalogo è installabile su Android come app web dalla pagina
+`https://ripper.maninimontero.win/ripper/films`: in Chrome usa **Installa app**
+o il comando omonimo nel menu. L'app apre il catalogo a schermo intero, con
+lista compatta, ricerca e filtri. Sul telefono **Guarda nel browser** è la
+scelta principale: non richiede un lettore separato né Tailscale se la pagina
+pubblica è già accessibile. La prima volta la Quadro P1000 prepara una copia
+MP4 H.264/AAC separata; poi il film parte subito. La copia occupa spazio
+aggiuntivo (circa 345 MiB per il DVD “Fog” provato) e non viene cancellata
+automaticamente. Con **Apri nel lettore** si usa invece l'MKV originale tramite
+Tailscale. Non è un APK e non richiede Play Store.
 
 DiscFlow cerca automaticamente titolo italiano, anno, regista, attori, generi,
 identificativo IMDb e copertina usando Wikidata e Wikipedia. Confronta il nome

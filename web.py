@@ -625,6 +625,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_range_file(selected, 'video/x-matroska', False)
             return
         if not self.allowed(): return
+        if parsed.path in (BASE+'/manifest.webmanifest', BASE+'/sw.js', BASE+'/icon-192.png', BASE+'/icon-512.png'):
+            files = {BASE+'/manifest.webmanifest': ('manifest.webmanifest', 'application/manifest+json'),
+                     BASE+'/sw.js': ('sw.js', 'text/javascript; charset=utf-8'),
+                     BASE+'/icon-192.png': ('icon-192.png', 'image/png'),
+                     BASE+'/icon-512.png': ('icon-512.png', 'image/png')}
+            filename, ctype = files[parsed.path]
+            self.reply(Path(__file__).with_name(filename).read_bytes(), ctype); return
         if parsed.path == BASE+'/films':
             page = Path(__file__).with_name('films.html').read_text().replace('TOKEN', TOKEN)
             self.reply(page.encode(), 'text/html; charset=utf-8'); return

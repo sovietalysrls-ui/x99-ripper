@@ -20,6 +20,14 @@ lettore, nella scheda trovi lo ZIP ufficiale di VLC per Windows 64 bit, da
 estrarre senza installazione. L'MKV originale resta disponibile con
 **Scarica l'MKV originale** nella scheda del film.
 
+Per vedere il film dal telefono Android, apri il catalogo in Chrome e usa
+**Installa app**. Nella lista del telefono **Guarda nel browser** apre la scheda
+e prepara la copia MP4 solo alla prima visione; l'originale resta intatto.
+La preparazione usa CPU e Quadro P1000 per alcuni minuti e richiede spazio
+aggiuntivo. Dopo, la riproduzione usa soltanto disco e rete. La visione nel
+browser funziona attraverso la pagina pubblica già autenticata; per un lettore
+esterno sul telefono serve Tailscale.
+
 Titolo italiano, anno, regia, attori e generi vengono cercati automaticamente.
 Le corrispondenze sicure rinominano il solo file finale e aggiornano `movie.nfo`
 per Jellyfin. Se due film hanno lo stesso nome, la scheda propone i risultati:
@@ -43,6 +51,6 @@ L'MKV acquisito e gli eventuali tentativi parziali restano nella cartella del fi
 
 ## Versione e ripristino
 
-La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.11.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
+La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.12.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
 
 DiscFlow usa MakeMKV e HandBrake già installati. Non include chiavi né funzioni per aggirare protezioni DRM.
