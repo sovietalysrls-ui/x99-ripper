@@ -228,6 +228,31 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(gpu[gpu.index('-e') + 1], 'nvenc_h265_10bit')
         self.assertEqual(gpu[gpu.index('-q') + 1], '28')
 
+    def test_italian_spanish_and_original_audio_without_dub_duplicates(self):
+        meta = {'streams': [
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 6, 'tags': {'language': 'eng'}},
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 2, 'tags': {'language': 'fre'}},
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 2, 'tags': {'language': 'ger'}},
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 2, 'tags': {'language': 'ita'}},
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 2, 'tags': {'language': 'spa'}},
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 2, 'tags': {'language': 'eng'}},
+            {'codec_type': 'subtitle', 'tags': {'language': 'ita'}},
+            {'codec_type': 'subtitle', 'tags': {'language': 'eng'}},
+            {'codec_type': 'subtitle', 'tags': {'language': 'spa'}},
+        ]}
+        chosen = ripper.audio_choices(meta, 'eng')
+        self.assertEqual(chosen, [4, 5, 1])
+        self.assertEqual([p['language'] for p in ripper.audio_plan(meta, chosen)], ['ita', 'spa', 'eng'])
+        self.assertEqual(ripper.sub_choices(meta), [1, 2, 3])
+        self.assertEqual(ripper.audio_choices(meta, 'fra'), [4, 5, 2])
+
+    def test_original_audio_first_if_no_italian(self):
+        meta = {'streams': [
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 2, 'tags': {'language': 'spa'}},
+            {'codec_type': 'audio', 'codec_name': 'ac3', 'channels': 6, 'tags': {'language': 'eng'}},
+        ]}
+        self.assertEqual(ripper.audio_choices(meta, 'eng'), [2, 1])
+
 
 if __name__ == '__main__':
     unittest.main()

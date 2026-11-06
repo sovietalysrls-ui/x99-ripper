@@ -565,7 +565,14 @@ class Manager:
                     job['encoder'] = encoder
                     meta=core.probe(source)
                     subs=core.sub_choices(meta)
-                    plan=core.audio_plan(meta,core.audio_choices(meta))
+                    if not job.get('original_language'):
+                        try:
+                            match = film_library.automatic_choice(source, title_hint=name)
+                            if match:
+                                job['original_language'] = match.get('original_language')
+                        except (OSError, ValueError, KeyError, TimeoutError):
+                            pass
+                    plan=core.audio_plan(meta,core.audio_choices(meta, job.get('original_language')))
                     scan=subprocess.run(core.HB+['-i',str(source),'--scan','--previews','10:0'],
                                         capture_output=True,text=True,timeout=240)
                     crop=core.CROP.search(scan.stdout+scan.stderr)
@@ -668,14 +675,27 @@ class Handler(BaseHTTPRequestHandler):
             try: self.reply(json.dumps(film_library.suggest(selected)[:5], ensure_ascii=False).encode(), 'application/json')
             except (ValueError, OSError, TimeoutError, KeyError) as exc: self.reply_error(400, str(exc))
             return
-        if parsed.path in (BASE+'/films/preview/status', BASE+'/films/preview/file'):
-            choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+        if parsed.path in (BASE+'/films/preview/status', BASE+'/films/preview/file', BASE+'/films/preview/tracks'):
+            params = urllib.parse.parse_qs(parsed.query)
+            choices = params.get('path', [])
             selected = completed_file(choices[0]) if len(choices) == 1 else None
             if not selected: self.send_error(404); return
+            if parsed.path.endswith('/tracks'):
+                try: self.reply(json.dumps(film_preview.tracks(selected), ensure_ascii=False).encode(), 'application/json')
+                except (OSError, ValueError, subprocess.SubprocessError) as exc: self.reply_error(400, str(exc))
+                return
+            try:
+                audio = int(params['audio'][0]) if 'audio' in params else None
+                subtitle = int(params['subtitle'][0]) if 'subtitle' in params else 0
+                if audio is not None or subtitle:
+                    audio, subtitle = film_preview.validate(selected, audio, subtitle)
+                    if audio == film_preview.validate(selected)[0] and subtitle == 0: audio = None
+            except (ValueError, subprocess.SubprocessError) as exc:
+                self.reply_error(400, str(exc)); return
             if parsed.path.endswith('/status'):
-                self.reply(json.dumps(film_preview.status(selected), ensure_ascii=False).encode(), 'application/json')
+                self.reply(json.dumps(film_preview.status(selected, audio, subtitle), ensure_ascii=False).encode(), 'application/json')
             else:
-                preview = film_preview.destination(selected)
+                preview = film_preview.destination(selected, audio, subtitle)
                 if not preview.is_file(): self.send_error(404); return
                 self.send_range_file(preview, 'video/mp4', False)
             return
@@ -722,7 +742,9 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self.read_json()
                 path = completed_file(payload['path'])
                 if not path: raise ValueError('Film non trovato.')
-                result = film_preview.start(path, lambda: bool(manager and manager.encoding))
+                audio = int(payload['audio']) if payload.get('audio') is not None else None
+                subtitle = int(payload.get('subtitle', 0))
+                result = film_preview.start(path, lambda: bool(manager and manager.encoding), audio, subtitle)
                 self.reply(json.dumps(result, ensure_ascii=False).encode(), 'application/json')
             except (ValueError, KeyError) as exc: self.reply_error(400, str(exc))
             return

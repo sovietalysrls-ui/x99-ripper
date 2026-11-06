@@ -53,9 +53,12 @@ def details(qid):
     people = ids('P57', 4)
     cast = ids('P161', 12)
     genres = ids('P136', 8)
-    wanted = list(dict.fromkeys(people + cast + genres))
-    entities = request(action='wbgetentities', ids='|'.join(wanted), props='labels', languages='it|en').get('entities', {}) if wanted else {}
+    original_languages = ids('P364', 3)
+    wanted = list(dict.fromkeys(people + cast + genres + original_languages))
+    entities = request(action='wbgetentities', ids='|'.join(wanted), props='labels|claims', languages='it|en').get('entities', {}) if wanted else {}
     names = lambda keys: [_label(entities.get(key, {})) for key in keys if _label(entities.get(key, {}))]
+    language_codes = [code for qid in original_languages for code in _values(entities.get(qid, {}), 'P220')
+                      if isinstance(code, str) and re.fullmatch(r'[a-z]{3}', code)]
     years = []
     for value in _values(entity, 'P577'):
         if isinstance(value, dict) and value.get('precision', 0) >= 9:
@@ -86,6 +89,7 @@ def details(qid):
     return {'title': _label(entity), 'year': min(years) if years else None,
             'original_title': original_title,
             'director': names(people), 'cast': names(cast), 'genres': names(genres),
+            'original_language': language_codes[0] if language_codes else '',
             'runtime_minutes': min(runtimes) if runtimes else None,
             'wikidata_id': qid, 'imdb_id': imdb, 'cover_url': cover_url,
             'cover_source': 'https://en.wikipedia.org/wiki/' + urllib.parse.quote(wiki_title.replace(' ', '_')) if cover_url else '',
@@ -114,9 +118,9 @@ def _wikipedia_match(query):
     return [p.get('pageprops', {}).get('wikibase_item', '') for p in found.values()]
 
 
-def suggest(path):
+def suggest(path, title_hint=None):
     """Rank film candidates from the disc name and runtime; never guess from the title alone."""
-    query = _movie_query(path.name)
+    query = _movie_query(title_hint or path.name)
     if len(query) < 2:
         return []
     probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
@@ -142,8 +146,8 @@ def suggest(path):
     return sorted(result, key=lambda x: x['confidence'], reverse=True)
 
 
-def automatic_choice(path):
-    matches = suggest(path)
+def automatic_choice(path, title_hint=None):
+    matches = suggest(path, title_hint)
     if not matches:
         return None
     best = matches[0]
@@ -186,6 +190,7 @@ def save(path, metadata):
             'genres': list(metadata.get('genres') or [])[:8],
             'wikidata_id': metadata.get('wikidata_id', ''),
             'imdb_id': metadata.get('imdb_id', ''),
+            'original_language': metadata.get('original_language', ''),
             'cover_url': metadata.get('cover_url', ''), 'cover_source': metadata.get('cover_source', ''),
             'source': metadata.get('source', 'manuale')}
     nfo = path.parent / 'movie.nfo'

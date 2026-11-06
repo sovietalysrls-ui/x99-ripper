@@ -21,7 +21,7 @@ DEVICE = os.environ.get('X99_RIPPER_DEVICE', '/dev/sr0')
 STATE = Path.home() / '.local/state/x99-ripper'
 HB = ([shutil.which('HandBrakeCLI')] if shutil.which('HandBrakeCLI') else
       ['flatpak', 'run', '--command=HandBrakeCLI', 'fr.handbrake.ghb'])
-LANGUAGES = ('ita', 'eng')
+SUBTITLE_LANGUAGES = ('ita', 'eng', 'spa')
 COPY_ENCODERS = {'aac':'copy:aac', 'ac3':'copy:ac3', 'eac3':'copy:eac3',
     'truehd':'copy:truehd', 'dts':'copy:dts', 'mp2':'copy:mp2',
     'mp3':'copy:mp3', 'flac':'copy:flac'}
@@ -120,26 +120,38 @@ def tracks(meta, kind):
 
 def lang(s):
     x = s.get('tags', {}).get('language', 'und').lower()
-    return {'it': 'ita', 'en': 'eng', 'es': 'spa'}.get(x, x)
+    return {'it': 'ita', 'en': 'eng', 'es': 'spa', 'fr': 'fra', 'fre': 'fra',
+            'de': 'deu', 'ger': 'deu', 'ja': 'jpn'}.get(x, x)
 
 
-def audio_choices(meta):
+def audio_choices(meta, original_language=None):
     aa = tracks(meta, 'audio')
-    return [i for language in LANGUAGES for i,s in enumerate(aa,1) if lang(s)==language]
+    def best(language):
+        matches = [(i, stream) for i, stream in enumerate(aa, 1) if lang(stream) == language]
+        return max(matches, key=lambda item: (item[1].get('channels', 0), -item[0]))[0] if matches else None
+    italian = best('ita')
+    spanish = best('spa')
+    original = best(lang({'tags': {'language': original_language}})) if original_language else None
+    if original is None:
+        candidate = next((lang(stream) for stream in aa if lang(stream) not in ('ita', 'spa', 'und')), None)
+        original = best(candidate) if candidate else None
+    order = ([italian, spanish, original] if italian else [original, spanish])
+    selected = list(dict.fromkeys(index for index in order if index is not None))
+    return selected or ([1] if aa else [])
 
 
 def sub_choices(meta):
-    return [i for i, s in enumerate(tracks(meta, 'subtitle'), 1) if lang(s) in LANGUAGES]
+    return [i for i, s in enumerate(tracks(meta, 'subtitle'), 1) if lang(s) in SUBTITLE_LANGUAGES]
 
 
 def audio_plan(meta, chosen):
     aa=tracks(meta,'audio')
-    if not chosen:raise ValueError('Nessuna traccia audio IT/EN disponibile.')
+    if not chosen:raise ValueError('Nessuna traccia audio disponibile.')
     plan=[]
     for index in chosen:
         if not 1<=index<=len(aa):raise ValueError('Indice audio non valido.')
         stream=aa[index-1];language=lang(stream)
-        if language not in LANGUAGES:raise ValueError('Lingua audio non prevista.')
+        if not re.fullmatch(r'[a-z]{2,3}', language):raise ValueError('Lingua audio non valida.')
         if language=='ita':
             encoder='av_aac';bitrate='160';mixdown='stereo'
         elif stream['codec_name'] in COPY_ENCODERS:
@@ -405,7 +417,7 @@ class App:
         recovery=ttk.Frame(self.details_panel,style='Card.TFrame');recovery.pack(fill='x',pady=(8,0))
         for label,action in [('Accoda',self.queue_encode),('Riprova',self.retry),('Apri cartella',self.open_folder),('Rimuovi intermedio',self.remove_intermediate)]:
             ttk.Button(recovery,text=label,style='App.TButton',command=action).pack(side='left',padx=3)
-        self.track_var=tk.StringVar(value='Audio IT/ES/EN presenti; italiano predefinito. Sottotitoli presenti ma spenti.')
+        self.track_var=tk.StringVar(value='Audio italiano, spagnolo e originale se presenti; italiano predefinito. Sottotitoli spenti.')
         ttk.Label(self.details_panel,textvariable=self.track_var,style='Muted.TLabel',wraplength=920).pack(anchor='w',pady=(9,0))
         self.details_open=False
 

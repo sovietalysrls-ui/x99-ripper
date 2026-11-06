@@ -51,6 +51,10 @@ L'MKV acquisito e gli eventuali tentativi parziali restano nella cartella del fi
 
 ## Versione e ripristino
 
-La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.12.1`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
+La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.13.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
 
 DiscFlow usa MakeMKV e HandBrake già installati. Non include chiavi né funzioni per aggirare protezioni DRM.
+
+### Visione con audio e sottotitoli
+
+Nel catalogo apri **Dettagli**, scegli **Audio** e **Sottotitoli** e premi **Guarda nel browser**. La preparazione della combinazione scelta usa la Quadro P1000 e richiede tempo e spazio soltanto la prima volta. I sottotitoli partono spenti. **Apri nel lettore** scarica un piccolo file di collegamento M3U: aprila con VLC o un altro lettore del dispositivo e scegli lì le tracce dell’MKV.
