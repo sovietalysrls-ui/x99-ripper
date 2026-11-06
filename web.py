@@ -446,12 +446,22 @@ class Manager:
             if changed:self.set('In attesa','I film con errore sono pronti per un nuovo tentativo.',0,queue=self.state['queue'])
             return changed
 
+    def next_ready_or_wait(self):
+        """Keep the encoder queue alive until an in-progress extraction joins it."""
+        while True:
+            with self.lock:
+                job = next((j for j in self.state['queue'] if j['status'] == 'pronto'), None)
+                if job or not self.busy:
+                    return job
+            time.sleep(0.25)
+
     def encode_queue(self):
         try:
             while True:
+                job = self.next_ready_or_wait()
+                if not job:
+                    break
                 with self.lock:
-                    job=next((j for j in self.state['queue'] if j['status']=='pronto'),None)
-                    if not job: break
                     job['status']='compressione'
                     self.set('Analisi', 'Preparo '+job['name']+'…',0,job=job)
                 try:

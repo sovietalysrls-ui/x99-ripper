@@ -95,6 +95,21 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(manager.set_encoder('cpu'))
         self.assertEqual(manager.state['encoder'], 'gpu')
 
+    def test_encoder_waits_for_disc_being_extracted(self):
+        manager = self.manager()
+        manager.state['queue'] = []
+        manager.busy = True
+        def finish_extraction():
+            with manager.lock:
+                manager.state['queue'].append({'name': 'Nuovo DVD', 'status': 'pronto'})
+                manager.busy = False
+        timer = threading.Timer(0.05, finish_extraction)
+        timer.start()
+        try:
+            self.assertEqual(manager.next_ready_or_wait()['name'], 'Nuovo DVD')
+        finally:
+            timer.join()
+
     def test_recovery_keeps_interrupted_file(self):
         manager = self.manager()
         with tempfile.TemporaryDirectory() as temp:
