@@ -11,6 +11,7 @@ from unittest import mock
 import ripper
 import web
 import migrate_desktop
+import film_library
 
 
 class QueueTests(unittest.TestCase):
@@ -51,10 +52,15 @@ class QueueTests(unittest.TestCase):
             try:
                 base = f'http://127.0.0.1:{server.server_port}/ripper/films'
                 page = urllib.request.urlopen(base, timeout=2).read().decode()
-                self.assertIn('Film &amp; altro_H265.mkv', page)
-                self.assertNotIn('B1_t00.mkv', page)
+                self.assertIn('Film completati', page)
+                listing = json.load(urllib.request.urlopen(base + '/data', timeout=2))
+                self.assertEqual([item['filename'] for item in listing], [final.name])
                 link = base + '/file?path=' + urllib.parse.quote('Film/Film & altro_H265.mkv')
                 self.assertEqual(urllib.request.urlopen(link, timeout=2).read(), b'final-video')
+                request = urllib.request.Request(link, headers={'Range': 'bytes=2-6'})
+                with urllib.request.urlopen(request, timeout=2) as response:
+                    self.assertEqual(response.status, 206)
+                    self.assertEqual(response.read(), b'nal-v')
                 self.assertIsNone(web.completed_file('../segreto.mkv'))
                 self.assertIsNone(web.completed_file('Film/B1_t00.mkv'))
                 with mock.patch.object(web, 'COMPLETED_CUSTOM', True):
@@ -62,6 +68,31 @@ class QueueTests(unittest.TestCase):
             finally:
                 server.shutdown()
                 server.server_close()
+
+    def test_reviewed_metadata_renames_final_and_writes_jellyfin_fields(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            source = folder / 'THE_FOG_H265.mkv'
+            source.write_bytes(b'keep video')
+            renamed = film_library.save(source, {'title': 'Fog', 'year': 1980,
+                'director': ['John Carpenter'], 'cast': ['Adrienne Barbeau'],
+                'genres': ['horror'], 'wikidata_id': 'Q500403'})
+            self.assertEqual(renamed.name, 'Fog (1980)_H265.mkv')
+            self.assertEqual(renamed.read_bytes(), b'keep video')
+            self.assertFalse(source.exists())
+            self.assertEqual(film_library.read(renamed)['director'], ['John Carpenter'])
+            nfo = (folder / 'movie.nfo').read_text()
+            self.assertIn('<director>John Carpenter</director>', nfo)
+            self.assertIn('<name>Adrienne Barbeau</name>', nfo)
+
+    def test_existing_unowned_nfo_prevents_automatic_replacement(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'film_H265.mkv'
+            source.write_bytes(b'video')
+            (Path(temp) / 'movie.nfo').write_text('<movie><title>Manuale</title></movie>')
+            with self.assertRaises(FileExistsError):
+                film_library.save(source, {'title': 'Film', 'year': 2000})
+            self.assertTrue(source.exists())
 
     def manager(self):
         manager = web.Manager.__new__(web.Manager)

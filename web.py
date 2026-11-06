@@ -17,6 +17,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import ripper as core
+import film_library
+import film_preview
 
 BASE = '/ripper'
 STATE = core.STATE / 'web-state.json'
@@ -29,6 +31,7 @@ TELEGRAM_CHAT = os.environ.get('X99_RIPPER_TELEGRAM_CHAT_ID', '')
 DESKTOP_MEDIA_CACHE = {}
 COMPLETED_CUSTOM = bool(os.environ.get('X99_RIPPER_COMPLETED_DIR'))
 COMPLETED_DIR = Path(os.environ.get('X99_RIPPER_COMPLETED_DIR') or core.ROOT).expanduser().resolve()
+AUTO_CATALOG_LOCK = threading.Lock()
 
 
 def completed_file(relative):
@@ -58,6 +61,47 @@ def completed_files():
         if completed_file(relative) == path.resolve():
             files.append(path)
     return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def film_data():
+    result = []
+    for path in completed_files():
+        info = film_library.read(path)
+        result.append({'path': path.relative_to(COMPLETED_DIR).as_posix(),
+                       'title': info.get('title') or path.stem.removesuffix('_H265').replace('_', ' '),
+                       'year': info.get('year'), 'director': info.get('director', []),
+                       'cast': info.get('cast', []), 'genres': info.get('genres', []),
+                       'imdb_id': info.get('imdb_id', ''), 'wikidata_id': info.get('wikidata_id', ''),
+                       'cover_url': info.get('cover_url', ''), 'cover_source': info.get('cover_source', ''),
+                       'source': info.get('source', ''), 'filename': path.name,
+                       'size': path.stat().st_size, 'modified': path.stat().st_mtime})
+    return result
+
+
+def catalog_automatically(paths=None):
+    """Use clear title/runtime matches; leave ambiguous discs for the film page."""
+    if not AUTO_CATALOG_LOCK.acquire(blocking=False):
+        return
+    try:
+        for path in paths or completed_files():
+            if (not path.is_file() or film_library.read(path) or (path.parent / 'movie.nfo').exists()
+                    or film_preview.status(path)['state'] in ('waiting', 'working')):
+                continue
+            try:
+                choice = film_library.automatic_choice(path)
+                if not choice:
+                    continue
+                renamed = film_library.save(path, choice)
+                if manager:
+                    with manager.lock:
+                        for job in manager.state['queue']:
+                            if job.get('output') == str(path):
+                                job['output'] = str(renamed)
+                        manager.set(queue=manager.state['queue'])
+            except (OSError, ValueError, KeyError, FileExistsError):
+                continue
+    finally:
+        AUTO_CATALOG_LOCK.release()
 
 
 def films_page():
@@ -496,6 +540,7 @@ class Manager:
                         except OSError as e:
                             job['catalog_error'] = str(e)
                     self.set('Verificato',name+' pronto. Intermedio conservato.',100,queue=self.state['queue'])
+                    threading.Thread(target=catalog_automatically, args=([out],), daemon=True).start()
                     notify('X99 Ripper: '+name+' completato e verificato.')
                 except Exception as e:
                     job['status']='errore';job['error']=str(e)
@@ -523,13 +568,44 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed(): return
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path == BASE+'/films':
-            self.reply(films_page().encode(), 'text/html; charset=utf-8'); return
+            page = Path(__file__).with_name('films.html').read_text().replace('TOKEN', TOKEN)
+            self.reply(page.encode(), 'text/html; charset=utf-8'); return
+        if parsed.path == BASE+'/films/data':
+            self.reply(json.dumps(film_data(), ensure_ascii=False).encode(), 'application/json'); return
+        if parsed.path == BASE+'/films/search':
+            query = urllib.parse.parse_qs(parsed.query).get('q', [''])[0]
+            try: self.reply(json.dumps(film_library.search(query), ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, OSError, TimeoutError, KeyError) as exc: self.reply_error(400, str(exc))
+            return
+        if parsed.path == BASE+'/films/details':
+            qid = urllib.parse.parse_qs(parsed.query).get('id', [''])[0]
+            try: self.reply(json.dumps(film_library.details(qid), ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, OSError, TimeoutError, KeyError) as exc: self.reply_error(400, str(exc))
+            return
+        if parsed.path == BASE+'/films/suggest':
+            choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+            selected = completed_file(choices[0]) if len(choices) == 1 else None
+            if not selected: self.send_error(404); return
+            try: self.reply(json.dumps(film_library.suggest(selected)[:5], ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, OSError, TimeoutError, KeyError) as exc: self.reply_error(400, str(exc))
+            return
+        if parsed.path in (BASE+'/films/preview/status', BASE+'/films/preview/file'):
+            choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+            selected = completed_file(choices[0]) if len(choices) == 1 else None
+            if not selected: self.send_error(404); return
+            if parsed.path.endswith('/status'):
+                self.reply(json.dumps(film_preview.status(selected), ensure_ascii=False).encode(), 'application/json')
+            else:
+                preview = film_preview.destination(selected)
+                if not preview.is_file(): self.send_error(404); return
+                self.send_range_file(preview, 'video/mp4', False)
+            return
         if parsed.path == BASE+'/films/file':
             choices = urllib.parse.parse_qs(parsed.query).get('path', [])
             selected = completed_file(choices[0]) if len(choices) == 1 else None
             if not selected:
                 self.send_error(404); return
-            self.send_completed_file(selected); return
+            self.send_range_file(selected, 'video/x-matroska', True); return
         if self.path == BASE+'/state':
             with manager.lock:
                 queue = []
@@ -562,6 +638,38 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed(): return
         if not secrets.compare_digest(self.headers.get('X-Ripper-Token',''),TOKEN):
             self.send_error(403); return
+        if self.path == BASE+'/films/preview/start':
+            try:
+                payload = self.read_json()
+                path = completed_file(payload['path'])
+                if not path: raise ValueError('Film non trovato.')
+                result = film_preview.start(path, lambda: bool(manager and manager.encoding))
+                self.reply(json.dumps(result, ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, KeyError) as exc: self.reply_error(400, str(exc))
+            return
+        if self.path == BASE+'/films/metadata':
+            try:
+                payload = self.read_json()
+                path = completed_file(payload['path'])
+                if not path: raise ValueError('Film non trovato.')
+                if film_preview.status(path)['state'] in ('waiting', 'working'):
+                    raise ValueError('Attendi che la copia per il browser sia pronta.')
+                if payload.get('wikidata_id'):
+                    metadata = film_library.details(payload['wikidata_id'])
+                else:
+                    metadata = {**film_library.read(path), 'title': payload['title'],
+                                'year': payload.get('year'), 'source': 'manuale'}
+                old_path = str(path)
+                renamed = film_library.save(path, metadata)
+                if manager:
+                    with manager.lock:
+                        for job in manager.state['queue']:
+                            if job.get('output') == old_path:
+                                job['output'] = str(renamed)
+                        manager.set(queue=manager.state['queue'])
+                self.reply(json.dumps({'path': renamed.relative_to(COMPLETED_DIR).as_posix()}, ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, KeyError, FileExistsError, OSError) as exc: self.reply_error(400, str(exc))
+            return
         if self.path == BASE+'/scan':ok=manager.start_scan()
         elif self.path == BASE+'/encode':ok=manager.start_encoding()
         elif self.path == BASE+'/retry':ok=manager.retry_errors()
@@ -586,22 +694,57 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('Content-Type',ctype)
         self.send_header('Cache-Control','no-store'); self.send_header('Content-Length',str(len(body)))
         self.end_headers(); self.wfile.write(body)
-    def send_completed_file(self, path):
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/octet-stream')
-        self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" +
-                         urllib.parse.quote(path.name, safe=''))
+    def reply_error(self, status, message):
+        body = json.dumps({'error': message}, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def read_json(self):
+        size = int(self.headers.get('Content-Length', '0'))
+        if not 0 < size <= 2048: raise ValueError('Dati troppo lunghi o mancanti.')
+        return json.loads(self.rfile.read(size))
+    def send_range_file(self, path, ctype, download):
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        requested = self.headers.get('Range', '')
+        if requested:
+            match = re.fullmatch(r'bytes=(\d*)-(\d*)', requested)
+            if not match or (not match[1] and not match[2]):
+                self.send_error(416); return
+            if match[1]:
+                start = int(match[1]); end = int(match[2]) if match[2] else end
+            else:
+                start = max(0, size - int(match[2]))
+            if start >= size or end < start:
+                self.send_error(416); return
+            end = min(end, size - 1)
+        self.send_response(206 if requested else 200)
+        self.send_header('Content-Type', ctype)
+        if download:
+            self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" +
+                             urllib.parse.quote(path.name, safe=''))
+        self.send_header('Accept-Ranges', 'bytes')
+        if requested:
+            self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('Content-Length', str(path.stat().st_size))
+        self.send_header('Content-Length', str(end - start + 1))
         self.end_headers()
         try:
             with path.open('rb') as stream:
-                while chunk := stream.read(1024 * 1024):
+                stream.seek(start)
+                remaining = end - start + 1
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk: break
                     self.wfile.write(chunk)
+                    remaining -= len(chunk)
         except (BrokenPipeError, ConnectionResetError):
             pass
     def log_message(self,*args): pass
 
 if __name__ == '__main__':
     manager = Manager()
+    threading.Thread(target=catalog_automatically, daemon=True).start()
     ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()

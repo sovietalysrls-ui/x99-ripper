@@ -1,7 +1,23 @@
-# DiscFlow 0.9.1 · coda DVD e Quadro P1000
+# DiscFlow 0.10.0 · coda DVD, catalogo e lettore nel browser
 
-La pagina include **Apri cartella film**: mostra nel browser i file finali e
-permette di scaricarli. Per impostazione predefinita legge la cartella di
+La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
+ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
+**Guarda** apre il lettore interno: alla prima visione la Quadro P1000 crea una
+copia MP4 H.264/AAC in `~/.local/state/x99-ripper/previews`; poi il film parte
+nel browser senza scaricare l'MKV. La copia viene creata solo su richiesta e
+non cancella l'originale. La timeline permette di saltare nel film quando la
+copia è pronta. Se la coda di compressione usa la GPU, la preparazione attende.
+
+DiscFlow cerca automaticamente titolo italiano, anno, regista, attori, generi,
+identificativo IMDb e copertina usando Wikidata e Wikipedia. Confronta il nome
+del DVD e la durata del film; rinomina il file finale e crea `movie.nfo` per
+Jellyfin solo quando la corrispondenza è sufficientemente chiara. Nei casi
+ambigui propone i risultati nella scheda del film e chiede di scegliere.
+Non serve una chiave API. Le copertine dipendono dalla disponibilità su
+Wikipedia; i film senza immagine restano senza copertina. Nessun file video
+viene eliminato automaticamente.
+
+Per impostazione predefinita legge la cartella di
 output e mostra solo i file `*_H265.mkv`, escludendo gli MKV sorgente. Per una
 cartella distinta imposta `X99_RIPPER_COMPLETED_DIR` nella configurazione
 locale dell'OptiPlex e riavvia il servizio web a coda ferma. In una cartella
