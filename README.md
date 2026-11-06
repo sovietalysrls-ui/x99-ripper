@@ -1,4 +1,4 @@
-# X99 Ripper 0.4.4
+# X99 Ripper 0.5.0
 
 Applicazione Linux con interfaccia grafica per estrarre un titolo DVD con MakeMKV e comprimerlo con HandBrake. Versione iniziale per Ubuntu 26.04.1 sull'X99.
 
@@ -37,6 +37,12 @@ Se una vecchia versione è già aperta e sta lavorando, lasciala finire: l'aggio
 ### Installazione su un secondo PC
 
 Installa `python3-tk`, `handbrake-cli`, `ffmpeg`, `eject` e MakeMKV, poi crea una cartella capiente e avvia l'installazione con `X99_RIPPER_OUTPUT_DIR="$HOME/Videos/X99-Ripper" ./install.sh`. L'app compare nel menu del secondo PC. Per usarla tramite desktop remoto, accedi al PC con un servizio già configurato sulla tua rete privata e apri X99 Ripper dal suo menu. Credenziali, chiavi SSH e chiavi MakeMKV restano nelle configurazioni locali e non vanno nel repository.
+
+### Pagina web per il DVD in serie
+
+Sul secondo PC esegui `./install-web.sh` dopo aver installato la versione desktop. Il servizio web ascolta solo sull'indirizzo Tailscale del PC, alla porta 8766, e mostra la pagina `/ripper`. Inserendo un DVD, la pagina sceglie il titolo più lungo e avvia automaticamente estrazione, analisi crop, compressione e verifica; espelle il disco dopo l'estrazione. L'output resta nella cartella locale configurata e l'MKV intermedio viene rimosso solo dopo la verifica. Se il programma desktop è aperto, la pagina non avvia un lavoro concorrente: completa quel lavoro e chiudi la finestra desktop prima di usare l'automazione web.
+
+Per notifiche Telegram, aggiungi `export X99_RIPPER_TELEGRAM_TOKEN=...` e `export X99_RIPPER_TELEGRAM_CHAT_ID=...` al file locale `~/.config/x99-ripper/config`, poi riavvia `systemctl --user restart x99-ripper-web.service`. Tieni quel file con permessi 600 e non inserirlo nel repository. Le notifiche segnalano completamento o errore; il funzionamento del ripper non dipende da Telegram. Il trasferimento futuro verso un NAS richiederà un percorso di destinazione e una verifica della copia prima della rimozione locale.
 
 ## Uso
 
