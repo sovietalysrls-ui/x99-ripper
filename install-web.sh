@@ -6,6 +6,7 @@ unit_dir="$HOME/.config/systemd/user"
 mkdir -p "$install_dir" "$unit_dir"
 install -m 644 "$script_dir/ripper.py" "$install_dir/ripper.py"
 install -m 644 "$script_dir/web.py" "$install_dir/web.py"
+install -m 700 "$script_dir/configure-telegram.py" "$install_dir/configure-telegram.py"
 install -m 755 "$script_dir/run-web.sh" "$install_dir/run-web.sh"
 cat > "$unit_dir/x99-ripper-web.service" <<EOF
 [Unit]

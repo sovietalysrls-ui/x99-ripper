@@ -1,4 +1,4 @@
-# X99 Ripper 0.5.0
+# X99 Ripper 0.5.1
 
 Applicazione Linux con interfaccia grafica per estrarre un titolo DVD con MakeMKV e comprimerlo con HandBrake. Versione iniziale per Ubuntu 26.04.1 sull'X99.
 
@@ -42,7 +42,7 @@ Installa `python3-tk`, `handbrake-cli`, `ffmpeg`, `eject` e MakeMKV, poi crea un
 
 Sul secondo PC esegui `./install-web.sh` dopo aver installato la versione desktop. Il servizio web mostra la pagina `/ripper` alla porta 8766. Se il proxy Cloudflare è su un altro PC della stessa LAN, imposta `X99_RIPPER_WEB_HOST` all'indirizzo LAN del computer con il lettore e `X99_RIPPER_ALLOWED_PROXY` all'indirizzo LAN del proxy prima di installare; le richieste da altri computer ricevono 403. Inserendo un DVD, la pagina sceglie il titolo più lungo e avvia automaticamente estrazione, analisi crop, compressione e verifica; espelle il disco dopo l'estrazione. L'output resta nella cartella locale configurata e l'MKV intermedio viene rimosso solo dopo la verifica. Se il programma desktop è aperto, la pagina non avvia un lavoro concorrente: completa quel lavoro e chiudi la finestra desktop prima di usare l'automazione web.
 
-Per notifiche Telegram, aggiungi `export X99_RIPPER_TELEGRAM_TOKEN=...` e `export X99_RIPPER_TELEGRAM_CHAT_ID=...` al file locale `~/.config/x99-ripper/config`, poi riavvia `systemctl --user restart x99-ripper-web.service`. Tieni quel file con permessi 600 e non inserirlo nel repository. Le notifiche segnalano completamento o errore; il funzionamento del ripper non dipende da Telegram. Il trasferimento futuro verso un NAS richiederà un percorso di destinazione e una verifica della copia prima della rimozione locale.
+Per notifiche Telegram, apri il terminale dell'OptiPlex ed esegui `python3 ~/.local/share/x99-ripper/configure-telegram.py`. Inserisci il token del bot personale quando richiesto: non appare sullo schermo. Lo script ti chiede di inviare un breve codice al bot, individua la chat e manda un messaggio di prova. Token e ID chat vengono salvati solo nel file locale `~/.config/x99-ripper/config` con permessi 600, mai nel repository. Le notifiche segnalano completamento o errore; il funzionamento del ripper non dipende da Telegram. Il trasferimento futuro verso un NAS richiederà un percorso di destinazione e una verifica della copia prima della rimozione locale.
 
 ## Uso
 
