@@ -32,9 +32,7 @@ Quando la coda attiva è terminata, aggiorna l'OptiPlex:
 ```bash
 mkdir -p "$HOME/backup-discflow-$(date +%Y%m%d)"
 cp -a "$HOME/.local/share/x99-ripper" "$HOME/.local/state/x99-ripper" "$HOME/backup-discflow-$(date +%Y%m%d)/"
-cd "$HOME/.local/src/x99-ripper"
-git fetch origin
-git switch feat/discflow-ai-mvp
+cd "$HOME/.local/src/discflow-ai-mvp"
 git pull --ff-only
 ./install.sh
 ./install-web.sh
