@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.mkv
+*.mp4
+*.iso
+*.log
+*.png
+*.jpg
+*.jpeg
+*.key
+.env
+.env.*
+jobs.json
+previews/
