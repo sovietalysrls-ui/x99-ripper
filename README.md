@@ -34,6 +34,10 @@ L'installazione copia l'app in `~/.local/share/x99-ripper` e crea solo il lancia
 
 Se una vecchia versione è già aperta e sta lavorando, lasciala finire: l'aggiornamento installato avrà effetto al prossimo avvio. Durante la lavorazione in corso puoi aprire il monitor di sola lettura con `python3 ~/.local/share/x99-ripper/monitor.py`; chiudere quel monitor non interrompe l'estrazione o la compressione.
 
+### Installazione su un secondo PC
+
+Installa `python3-tk`, `handbrake-cli`, `ffmpeg`, `eject` e MakeMKV, poi crea una cartella capiente e avvia l'installazione con `X99_RIPPER_OUTPUT_DIR="$HOME/Videos/X99-Ripper" ./install.sh`. L'app compare nel menu del secondo PC. Per usarla tramite desktop remoto, accedi al PC con un servizio già configurato sulla tua rete privata e apri X99 Ripper dal suo menu. Credenziali, chiavi SSH e chiavi MakeMKV restano nelle configurazioni locali e non vanno nel repository.
+
 ## Uso
 
 1. Inserisci un DVD e premi **Rileva disco**. L'app propone il titolo più lungo; controlla durata e titolo e scegli il nome del film.

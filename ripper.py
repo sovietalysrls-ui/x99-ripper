@@ -579,7 +579,7 @@ class App:
             free=shutil.disk_usage(ROOT).free
             size=int(title.get('size') or 0)
             if free < max(size + 8*2**30, 12*2**30):
-                raise ValueError('Spazio insufficiente per intermedio e compressione; liberare spazio sul Samsung.')
+                raise ValueError('Spazio insufficiente per intermedio e compressione; liberare spazio nella cartella di destinazione.')
         except Exception as e:messagebox.showerror('Spazio',str(e));return
         folder=ROOT/name
         if folder.exists():
