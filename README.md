@@ -1,4 +1,4 @@
-# DiscFlow 0.8.0 · coda DVD e Quadro P1000
+# DiscFlow 0.8.1 · coda DVD e Quadro P1000
 
 La pagina web separa lettore e compressione. Puoi scegliere **CPU** (x265
 10 bit, slow, RF22) o **Quadro P1000** (NVENC HEVC 10 bit, medium, CQ28)

@@ -438,7 +438,7 @@ manager = None
 
 class Handler(BaseHTTPRequestHandler):
     def allowed(self):
-        if self.client_address[0] in ('127.0.0.1', ALLOWED_PROXY):
+        if self.client_address[0] in ('127.0.0.1', ALLOWED_PROXY, HOST):
             return True
         self.send_error(403)
         return False
