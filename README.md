@@ -1,4 +1,4 @@
-# DiscFlow 0.13.1 · coda DVD, catalogo e app Android
+# DiscFlow 0.13.2 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
