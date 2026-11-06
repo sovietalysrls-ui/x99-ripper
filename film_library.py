@@ -25,9 +25,53 @@ def search(query):
     if not 2 <= len(query) <= 100:
         raise ValueError('Scrivi almeno due lettere del titolo.')
     data = request(action='wbsearchentities', search=query, language='it', type='item', limit=8)
-    return [{'id': item['id'], 'title': item.get('label', ''),
-             'description': item.get('description', '')} for item in data.get('search', [])
-            if QID.fullmatch(item.get('id', ''))]
+    exact = [{'id': item['id'], 'title': item.get('label', ''),
+              'description': item.get('description', '')} for item in data.get('search', [])
+             if QID.fullmatch(item.get('id', ''))]
+    films = [item for item in exact if _film_description(item['description'])]
+    if not films:
+        films = _wikipedia_fuzzy_films(query)
+    return films[:8]
+
+
+def _film_description(description):
+    return bool(re.search(r'\b(?:film|movie|pellicola)\b', description, flags=re.I))
+
+
+def _wikipedia_fuzzy_films(query):
+    # MediaWiki search supports edit-distance one with ~1. This is only a
+    # candidate list: the user must confirm a film before its metadata is saved.
+    words = re.findall(r'[\w\d]+', query, flags=re.UNICODE)
+    fuzzy = ' '.join(word + '~1' if len(word) >= 4 else word for word in words)
+    url = 'https://it.wikipedia.org/w/api.php?' + urllib.parse.urlencode({
+        'action': 'query', 'list': 'search', 'srsearch': fuzzy,
+        'srnamespace': 0, 'srlimit': 12, 'format': 'json'})
+    with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': AGENT}), timeout=12) as response:
+        pages = json.load(response).get('query', {}).get('search', [])
+    if not pages:
+        return []
+    url = 'https://it.wikipedia.org/w/api.php?' + urllib.parse.urlencode({
+        'action': 'query', 'pageids': '|'.join(str(p['pageid']) for p in pages),
+        'prop': 'pageprops', 'ppprop': 'wikibase_item', 'format': 'json'})
+    with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': AGENT}), timeout=12) as response:
+        found = json.load(response).get('query', {}).get('pages', {})
+    ordered = [(page['title'], found.get(str(page['pageid']), {}).get('pageprops', {}).get('wikibase_item', ''))
+               for page in pages]
+    ids = list(dict.fromkeys(qid for _, qid in ordered if QID.fullmatch(qid)))
+    if not ids:
+        return []
+    entities = request(action='wbgetentities', ids='|'.join(ids), props='labels|descriptions|claims',
+                       languages='it|en').get('entities', {})
+    results = []
+    for page_title, qid in ordered:
+        entity = entities.get(qid, {})
+        description = ((entity.get('descriptions', {}).get('it') or
+                        entity.get('descriptions', {}).get('en') or {}).get('value', ''))
+        if not (_film_description(description) or
+                any(isinstance(v, dict) and v.get('id') == 'Q11424' for v in _values(entity, 'P31'))):
+            continue
+        results.append({'id': qid, 'title': _label(entity) or page_title, 'description': description})
+    return results
 
 
 def _values(entity, prop):

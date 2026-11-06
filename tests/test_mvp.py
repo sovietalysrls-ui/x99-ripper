@@ -1,4 +1,5 @@
 import json
+import io
 import tempfile
 import threading
 import unittest
@@ -15,6 +16,32 @@ import film_library
 
 
 class QueueTests(unittest.TestCase):
+    def test_imprecise_title_finds_italian_film_without_suggesting_people(self):
+        def wikipedia(req, timeout):
+            url = req.full_url
+            if 'list=search' in url:
+                self.assertIn('case~1+ridono~1', url)
+                data = {'query': {'search': [
+                    {'pageid': 10, 'title': 'La casa dalle finestre che ridono'},
+                    {'pageid': 11, 'title': 'Vanna Busoni'}]}}
+            else:
+                data = {'query': {'pages': {
+                    '10': {'pageprops': {'wikibase_item': 'Q2602481'}},
+                    '11': {'pageprops': {'wikibase_item': 'Q4008610'}}}}}
+            return io.BytesIO(json.dumps(data).encode())
+        def wikidata(**params):
+            if params['action'] == 'wbsearchentities':
+                return {'search': []}
+            return {'entities': {
+                'Q2602481': {'labels': {'it': {'value': 'La casa dalle finestre che ridono'}},
+                             'descriptions': {'it': {'value': 'film del 1976 diretto da Pupi Avati'}}},
+                'Q4008610': {'labels': {'it': {'value': 'Vanna Busoni'}},
+                             'descriptions': {'it': {'value': 'attrice italiana'}}}}}
+        with mock.patch.object(film_library, 'request', side_effect=wikidata), \
+                mock.patch.object(film_library.urllib.request, 'urlopen', side_effect=wikipedia):
+            found = film_library.search('case ridono')
+        self.assertEqual([item['id'] for item in found], ['Q2602481'])
+
     def test_migrates_owned_source_without_deleting_media(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

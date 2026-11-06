@@ -1,4 +1,4 @@
-# DiscFlow 0.13.2 · coda DVD, catalogo e app Android
+# DiscFlow 0.14.0 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -208,3 +208,7 @@ La scansione di un DVD reale è riuscita; l'estrazione completa, l'espulsione e 
 ## Audio, sottotitoli e visione
 
 La transcodifica conserva una traccia italiana come predefinita, una spagnola se presente e la lingua originale se disponibile; conserva i sottotitoli italiani, inglesi e spagnoli come tracce selezionabili, tutti spenti per impostazione iniziale. I DVD già acquisiti restano disponibili. Per aprire il file finale in VLC, il catalogo scarica un piccolo file di collegamento M3U: aprila con il lettore associato sul dispositivo. Nel browser si scelgono audio e sottotitoli prima di avviare; ogni combinazione viene preparata su richiesta in una copia MP4 separata, con i sottotitoli impressi nella copia perché i sottotitoli DVD sono bitmap. Il file MKV non viene modificato dalla visione.
+
+## Titoli non riconosciuti
+
+Nel catalogo i film senza metadati verificati mostrano **Trova titolo**. Se il riconoscimento automatico non trova un film, DiscFlow chiede un indizio: bastano poche parole, anche con un piccolo errore, per esempio `case ridono`. La ricerca combina Wikidata e la ricerca italiana di Wikipedia con tolleranza agli errori. Il risultato resta una proposta: verifica titolo, anno e regista prima di confermarlo.
