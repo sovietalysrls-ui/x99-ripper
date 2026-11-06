@@ -24,6 +24,7 @@ HOST = os.environ.get('X99_RIPPER_WEB_HOST', '127.0.0.1')
 ALLOWED_PROXY = os.environ.get('X99_RIPPER_ALLOWED_PROXY', '')
 TELEGRAM_TOKEN = os.environ.get('X99_RIPPER_TELEGRAM_TOKEN', '')
 TELEGRAM_CHAT = os.environ.get('X99_RIPPER_TELEGRAM_CHAT_ID', '')
+DESKTOP_MEDIA_CACHE = {}
 
 
 def notify(message):
@@ -35,6 +36,60 @@ def notify(message):
             'https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage', data=body), timeout=10).close()
     except Exception:
         pass
+
+
+def desktop_jobs():
+    """Read the desktop queue independently of the browser controller queue."""
+    try:
+        jobs = json.loads((core.STATE / 'jobs.json').read_text())
+    except (OSError, ValueError):
+        return []
+    result = []
+    for job in jobs:
+        status = job.get('status', '')
+        folder = Path(job.get('folder') or '/nonexistent')
+        item = {key: job.get(key, '') for key in ('id', 'name', 'status', 'error', 'title_id', 'crop')}
+        item['percent'] = None
+        item['eta'] = ''
+        item['written_gib'] = None
+        item['expected_gib'] = None
+        source = job.get('source')
+        if source and Path(source).is_file():
+            try:
+                stat = Path(source).stat()
+                cache_key = (source, stat.st_size, stat.st_mtime_ns)
+                if cache_key not in DESKTOP_MEDIA_CACHE:
+                    probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries',
+                                            'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1',
+                                            source], capture_output=True, text=True, timeout=10)
+                    seconds = float(probe.stdout.strip()) if probe.returncode == 0 else 0
+                    if len(DESKTOP_MEDIA_CACHE) > 50: DESKTOP_MEDIA_CACHE.clear()
+                    DESKTOP_MEDIA_CACHE[cache_key] = seconds
+                item['duration_seconds'] = round(DESKTOP_MEDIA_CACHE[cache_key])
+                item['size_gib'] = round(stat.st_size / 2**30, 1)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                pass
+        if status == 'compressione':
+            try:
+                tail = (folder / 'compressione.log').read_bytes()[-12000:].decode(errors='replace')
+                matches = re.findall(r'Encoding:.*?(\d+(?:\.\d+)?)\s*%[^\r\n]*?ETA\s+([0-9hms]+)', tail)
+                if matches:
+                    item['percent'] = float(matches[-1][0])
+                    item['eta'] = matches[-1][1]
+            except OSError:
+                pass
+        elif status == 'estrazione':
+            try:
+                size = max((p.stat().st_size for p in folder.glob('*.mkv')), default=0)
+                expected = int(job.get('expected_bytes') or 0)
+                item['written_gib'] = round(size / 2**30, 2)
+                if expected:
+                    item['expected_gib'] = round(expected / 2**30, 2)
+                    item['percent'] = round(min(99, size / expected * 100), 1)
+            except (OSError, ValueError):
+                pass
+        result.append(item)
+    return result
 
 
 class Manager:
@@ -184,6 +239,11 @@ class Manager:
                     h, m, s = map(int, t['duration'].split(':')); return h*3600+m*60+s
                 except ValueError: return 0
             title = max(titles, key=seconds)
+            self.set(detected_titles=[{'id':t['id'], 'name':t['name'],
+                                        'duration':t['duration'],
+                                        'size_gib':round(int(t['size'] or 0)/2**30,1)}
+                                       for t in sorted(titles,key=seconds,reverse=True)],
+                     selected_title_id=title['id'])
             name = core.safe_name(core.disc_label(text) or title['name'] or 'Film_' + time.strftime('%Y%m%d_%H%M'))
             folder = core.ROOT / name
             if folder.exists():
@@ -200,7 +260,8 @@ class Manager:
             source = files[0]
             subprocess.run(['eject',core.DEVICE], capture_output=True, timeout=30)
             queued = {'name':name,'folder':str(folder),'source':str(source),
-                      'title_id':title['id'],'status':'pronto'}
+                      'title_id':title['id'],'duration':title['duration'],
+                      'status':'pronto'}
             with self.lock:
                 jobs = self.state['queue'] + [queued]
             self.set('In attesa', name+' estratto. Inserisci il prossimo DVD oppure avvia la compressione.',
@@ -306,15 +367,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == BASE+'/state':
             with manager.lock:
                 state={**manager.state,'scan_busy':manager.busy,
-                       'encode_busy':manager.encoding,'desktop_active':manager.desktop_active()}
+                       'encode_busy':manager.encoding,'desktop_active':manager.desktop_active(),
+                       'desktop_jobs':desktop_jobs(),
+                       'free_gib':round(shutil.disk_usage(core.ROOT).free/2**30,1)}
                 data = json.dumps(state,ensure_ascii=False).encode()
             self.reply(data,'application/json'); return
         if self.path not in (BASE, BASE+'/'):
             self.send_error(404); return
-        page = '''<!doctype html><html lang="it"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ripper DVD</title>
-<style>body{font:16px system-ui;background:#edf2f7;color:#1e3046;margin:0}.wrap{max-width:760px;margin:5vh auto;padding:20px}h1{font-size:30px;margin:0 0 8px}.muted{color:#63758b}.card{background:white;border-radius:18px;padding:24px;margin:20px 0;box-shadow:0 5px 24px #1232}#phase{font-size:24px;font-weight:700}progress{width:100%;height:18px;margin:20px 0}button{background:#2459a8;color:white;border:0;border-radius:10px;padding:13px 20px;font:inherit;cursor:pointer}button:disabled{opacity:.5}pre{white-space:pre-wrap;font-size:13px;color:#536276}a{color:#2459a8}</style>
-<div class="wrap"><h1>Ripper DVD</h1><p class="muted">OptiPlex · carica i DVD ora, comprimi più tardi</p><div class="card"><div id="phase">Caricamento…</div><p id="detail"></p><progress id="bar" max="100" value="0"></progress><p id="film" class="muted"></p><p><label>Numero massimo in attesa: <select id="limit"><option value="5">5 DVD</option><option value="10">10 DVD</option></select></label></p><button id="scan" onclick="scan()">Rileva DVD ora</button> <button id="encode" onclick="encode()">Avvia compressione della coda</button></div><div class="card"><h2>Film in coda</h2><pre id="queue"></pre><button id="retry" onclick="retry()">Riprova film con errore</button></div><details class="card"><summary>Dettagli e messaggi</summary><pre id="log"></pre></details></div>
-<script>const phase=document.getElementById('phase'),detail=document.getElementById('detail'),bar=document.getElementById('bar'),film=document.getElementById('film'),log=document.getElementById('log'),queue=document.getElementById('queue'),scanButton=document.getElementById('scan'),encodeButton=document.getElementById('encode'),retryButton=document.getElementById('retry'),limit=document.getElementById('limit');const headers={'X-Ripper-Token':'TOKEN'};async function refresh(){try{let s=await(await fetch('/ripper/state',{cache:'no-store'})).json();phase.textContent=s.phase;detail.textContent=s.detail;bar.value=s.percent||0;film.textContent=s.job?.name||'';log.textContent=(s.log||[]).join('\\n');queue.textContent=(s.queue||[]).map((j,i)=>`${i+1}. ${j.name} — ${j.status}${j.error?' · '+j.error:''}${j.cleanup_error?' · intermedio rimasto':''}`).join('\\n')||'Nessun film in coda.';limit.value=String(s.max_discs||10);let pending=(s.queue||[]).filter(j=>j.status==='pronto'||j.status==='compressione').length;scanButton.disabled=s.desktop_active||s.scan_busy||s.encode_busy||pending>=s.max_discs;encodeButton.disabled=s.desktop_active||s.scan_busy||s.encode_busy||!(s.queue||[]).some(j=>j.status==='pronto');retryButton.disabled=s.desktop_active||s.scan_busy||s.encode_busy||!(s.queue||[]).some(j=>j.status==='errore');limit.disabled=s.scan_busy||s.encode_busy}catch{detail.textContent='Connessione non disponibile'}}async function scan(){scanButton.disabled=true;await fetch('/ripper/scan',{method:'POST',headers});refresh()}async function encode(){encodeButton.disabled=true;await fetch('/ripper/encode',{method:'POST',headers});refresh()}async function retry(){retryButton.disabled=true;await fetch('/ripper/retry',{method:'POST',headers});refresh()}limit.onchange=async()=>{await fetch('/ripper/limit/'+limit.value,{method:'POST',headers});refresh()};refresh();setInterval(refresh,2000)</script></html>'''.replace('TOKEN', TOKEN)
+        page = Path(__file__).with_name('web.html').read_text().replace('TOKEN', TOKEN)
         self.reply(page.encode(),'text/html; charset=utf-8')
 
     def do_POST(self):
