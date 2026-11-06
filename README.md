@@ -1,4 +1,4 @@
-# X99 Ripper 0.4.3
+# X99 Ripper 0.4.4
 
 Applicazione Linux con interfaccia grafica per estrarre un titolo DVD con MakeMKV e comprimerlo con HandBrake. Versione iniziale per Ubuntu 26.04.1 sull'X99.
 
@@ -30,7 +30,7 @@ Scompatta o copia questa cartella e avvia `./run.sh`, oppure installa una voce n
 ./install.sh
 ```
 
-L'installazione copia l'app in `~/.local/share/x99-ripper` e crea solo il lanciatore utente. Non modifica Docker, Ollama o Tailscale. Per aggiornare, riesegui `./install.sh` dalla nuova versione.
+L'installazione copia l'app in `~/.local/share/x99-ripper` e crea solo il lanciatore utente. Non modifica Docker, Ollama o Tailscale. Per aggiornare, riesegui `./install.sh` dalla nuova versione. Su un altro PC puoi scegliere la cartella di destinazione senza modificare il codice: `X99_RIPPER_OUTPUT_DIR="$HOME/Videos/X99-Ripper" ./install.sh`. La cartella deve già esistere ed essere scrivibile; la scelta viene salvata solo sul PC in `~/.config/x99-ripper/config`. Il lettore predefinito è `/dev/sr0` e si può cambiare con `X99_RIPPER_DEVICE` allo stesso modo. Se `HandBrakeCLI` è installato come pacchetto Ubuntu, l'app lo usa direttamente; altrimenti usa il Flatpak verificato sull'X99.
 
 Se una vecchia versione è già aperta e sta lavorando, lasciala finire: l'aggiornamento installato avrà effetto al prossimo avvio. Durante la lavorazione in corso puoi aprire il monitor di sola lettura con `python3 ~/.local/share/x99-ripper/monitor.py`; chiudere quel monitor non interrompe l'estrazione o la compressione.
 

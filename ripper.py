@@ -16,10 +16,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-ROOT = Path('/mnt/x99/DVD_RIPPATI')
-DEVICE = '/dev/sr0'
+ROOT = Path(os.environ.get('X99_RIPPER_OUTPUT_DIR', '/mnt/x99/DVD_RIPPATI')).expanduser()
+DEVICE = os.environ.get('X99_RIPPER_DEVICE', '/dev/sr0')
 STATE = Path.home() / '.local/state/x99-ripper'
-HB = ['flatpak', 'run', '--command=HandBrakeCLI', 'fr.handbrake.ghb']
+HB = ([shutil.which('HandBrakeCLI')] if shutil.which('HandBrakeCLI') else
+      ['flatpak', 'run', '--command=HandBrakeCLI', 'fr.handbrake.ghb'])
 LANGUAGES = ('ita', 'spa', 'eng')
 COPY_ENCODERS = {'aac':'copy:aac', 'ac3':'copy:ac3', 'eac3':'copy:eac3',
     'truehd':'copy:truehd', 'dts':'copy:dts', 'mp2':'copy:mp2',
@@ -515,8 +516,8 @@ class App:
         self.root.after(1000,self.refresh_activity)
 
     def update_free(self):
-        try: self.free_var.set(f'Spazio libero Samsung: {shutil.disk_usage(ROOT).free/2**30:.1f} GiB')
-        except OSError: self.free_var.set('Samsung non disponibile')
+        try: self.free_var.set(f'Spazio libero: {shutil.disk_usage(ROOT).free/2**30:.1f} GiB')
+        except OSError: self.free_var.set('Cartella di destinazione non disponibile')
         self.root.after(10000,self.update_free)
 
     def append(self,msg):
