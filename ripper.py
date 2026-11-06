@@ -21,7 +21,7 @@ DEVICE = os.environ.get('X99_RIPPER_DEVICE', '/dev/sr0')
 STATE = Path.home() / '.local/state/x99-ripper'
 HB = ([shutil.which('HandBrakeCLI')] if shutil.which('HandBrakeCLI') else
       ['flatpak', 'run', '--command=HandBrakeCLI', 'fr.handbrake.ghb'])
-LANGUAGES = ('ita', 'spa', 'eng')
+LANGUAGES = ('ita', 'eng')
 COPY_ENCODERS = {'aac':'copy:aac', 'ac3':'copy:ac3', 'eac3':'copy:eac3',
     'truehd':'copy:truehd', 'dts':'copy:dts', 'mp2':'copy:mp2',
     'mp3':'copy:mp3', 'flac':'copy:flac'}
@@ -134,7 +134,7 @@ def sub_choices(meta):
 
 def audio_plan(meta, chosen):
     aa=tracks(meta,'audio')
-    if not chosen:raise ValueError('Nessuna traccia audio IT/ES/EN disponibile.')
+    if not chosen:raise ValueError('Nessuna traccia audio IT/EN disponibile.')
     plan=[]
     for index in chosen:
         if not 1<=index<=len(aa):raise ValueError('Indice audio non valido.')
@@ -202,7 +202,20 @@ def verify(source_meta, outpath, expected_subs, plan):
     dst_duration = float(m['format']['duration'])
     if abs(src_duration - dst_duration) > max(10, src_duration * .01):
         raise RuntimeError('Durata output diversa dalla sorgente.')
+    verify_decode_samples(outpath, dst_duration)
     return m
+
+
+def verify_decode_samples(path, duration):
+    """Decode short video samples near the beginning and end of the output."""
+    starts = (5, max(5, int(duration) - 20)) if duration > 40 else (0,)
+    for start in dict.fromkeys(starts):
+        cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-xerror', '-ss', str(start),
+               '-i', str(path), '-t', '10', '-map', '0:v:0', '-an', '-sn',
+               '-f', 'null', '-']
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode:
+            raise RuntimeError('Decodifica campione video fallita: ' + result.stderr[-600:])
 
 
 def remove_owned_intermediate(job, output):
@@ -743,13 +756,7 @@ class App:
                         if rc:raise RuntimeError(f'HandBrake terminato con codice {rc}. Intermedio conservato.')
                         verify(m,partial,subs,plan)
                         partial.rename(out)
-                        removed=False;cleanup_error=''
-                        if 'title_id' in j:
-                            try:
-                                removed=remove_owned_intermediate(j,out)
-                            except Exception as exc:
-                                cleanup_error=str(exc)
-                        self.events.put(('encoded',(j['id'],removed,cleanup_error)))
+                        self.events.put(('encoded',(j['id'],False,'')))
                     except Exception as e:self.events.put(('job_error',(j['id'],str(e))))
                     finally:self.events.put(('encode_done',None))
                 threading.Thread(target=work,daemon=True).start()

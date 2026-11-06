@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -36,6 +37,20 @@ def notify(message):
             'https://api.telegram.org/bot' + TELEGRAM_TOKEN + '/sendMessage', data=body), timeout=10).close()
     except Exception:
         pass
+
+
+def write_jellyfin_nfo(folder, title, year=None):
+    """Write only reviewed metadata; never replace a user's existing NFO."""
+    target = Path(folder) / 'movie.nfo'
+    if not title or target.exists():
+        return False
+    movie = ET.Element('movie')
+    ET.SubElement(movie, 'title').text = title
+    if year:
+        ET.SubElement(movie, 'year').text = str(year)
+    with target.open('xb') as stream:
+        ET.ElementTree(movie).write(stream, encoding='utf-8', xml_declaration=True)
+    return True
 
 
 def desktop_jobs():
@@ -104,9 +119,9 @@ class Manager:
                 old['detail'] = 'Il servizio è stato riavviato. Sorgente e parziale sono conservati.'
             self.state.update(old)
             for job in self.state['queue']:
-                if job['status']=='compressione':
+                if job['status'] in ('compressione', 'estrazione'):
                     job['status']='errore'
-                    job['error']='Codifica interrotta; sorgente e parziale conservati.'
+                    job['error']='Lavoro interrotto; controlla il file sorgente e usa Riprova errori.'
         except (OSError, ValueError):
             pass
         self.busy = False
@@ -143,7 +158,12 @@ class Manager:
                         f.write(line + '\n'); f.flush()
                         if progress:
                             m = re.search(r'Encoding:.*?(\d+(?:\.\d+)?)\s*%', line)
-                            if m: self.set(percent=float(m.group(1)), detail=self.state['job']['name']+' · '+m.group(1)+'%')
+                            if m:
+                                with self.lock:
+                                    active = next((j for j in self.state['queue'] if j['status'] == 'compressione'), None)
+                                    if active:
+                                        active['percent'] = float(m.group(1))
+                                        self.set(percent=active['percent'], detail=active['name']+' · '+m.group(1)+'%', queue=self.state['queue'])
                         elif line.startswith('PRGV:'):
                             self.set(detail='MakeMKV sta leggendo il DVD…')
                     line = ''
@@ -219,7 +239,7 @@ class Manager:
     def start_scan(self):
         with self.lock:
             pending = sum(j['status'] in ('pronto','compressione') for j in self.state['queue'])
-            if self.busy or self.encoding or self.desktop_active() or pending >= self.state['max_discs']:
+            if self.busy or self.desktop_active() or pending >= self.state['max_discs']:
                 return False
             self.busy = True
         threading.Thread(target=self.workflow, daemon=True).start()
@@ -252,22 +272,33 @@ class Manager:
             if shutil.disk_usage(core.ROOT).free < max(expected+8*2**30, 12*2**30):
                 raise RuntimeError('Spazio insufficiente per estrazione e compressione.')
             folder.mkdir(parents=True)
-            self.set('Estrazione', 'Estraggo ' + name + '…', 0, job={'name': name, 'folder': str(folder), 'title_id': title['id'], 'expected_bytes':expected})
+            queued = {'name':name,'folder':str(folder),'source':'',
+                      'title_id':title['id'],'duration':title['duration'],
+                      'expected_bytes':expected,'status':'estrazione'}
+            with self.lock:
+                self.set('Estrazione', 'Estraggo ' + name + '…', 0,
+                         job=queued, queue=self.state['queue'] + [queued])
             rc = self.run(['makemkvcon','-r','mkv','dev:'+core.DEVICE,str(title['id']),str(folder)], folder/'estrazione.log')
             if rc: raise RuntimeError('MakeMKV si è fermato. Controlla estrazione.log; i file restano conservati.')
             files = sorted(folder.glob('*.mkv'), key=lambda p:p.stat().st_size, reverse=True)
             if not files: raise RuntimeError('Nessun MKV estratto.')
             source = files[0]
+            core.probe(source)
             subprocess.run(['eject',core.DEVICE], capture_output=True, timeout=30)
-            queued = {'name':name,'folder':str(folder),'source':str(source),
-                      'title_id':title['id'],'duration':title['duration'],
-                      'status':'pronto'}
             with self.lock:
-                jobs = self.state['queue'] + [queued]
+                queued['source'] = str(source)
+                queued['size_gib'] = round(source.stat().st_size / 2**30, 1)
+                queued['status'] = 'pronto'
+                jobs = self.state['queue']
             self.set('In attesa', name+' estratto. Inserisci il prossimo DVD oppure avvia la compressione.',
                      0,job=None,queue=jobs)
             notify('X99 Ripper: '+name+' estratto; '+str(sum(j['status']=='pronto' for j in jobs))+' film in attesa.')
         except Exception as e:
+            if 'queued' in locals():
+                with self.lock:
+                    queued['status'] = 'errore'
+                    queued['error'] = str(e)
+                    self.set(queue=self.state['queue'])
             self.set('Errore', str(e), log=str(e))
             notify('X99 Ripper: serve attenzione. '+str(e))
         finally:
@@ -275,7 +306,7 @@ class Manager:
 
     def start_encoding(self):
         with self.lock:
-            if (self.busy or self.encoding or self.desktop_active() or
+            if (self.encoding or self.desktop_active() or
                     not any(j['status']=='pronto' for j in self.state['queue'])):
                 return False
             self.encoding = True
@@ -289,12 +320,40 @@ class Manager:
             self.set(max_discs=limit)
         return True
 
+    def set_catalog(self, index, title, year):
+        if not isinstance(title, str):
+            return False
+        title = title.strip()
+        if not title or len(title) > 120 or any(ord(c) < 32 for c in title):
+            return False
+        if year not in (None, ''):
+            try: year = int(year)
+            except (TypeError, ValueError): return False
+            if not 1888 <= year <= 2100: return False
+        with self.lock:
+            if not 0 <= index < len(self.state['queue']): return False
+            job = self.state['queue'][index]
+            if job['status'] != 'pronto': return False
+            job['catalog_title'] = title
+            job['catalog_year'] = year or None
+            self.set(queue=self.state['queue'])
+        return True
+
     def retry_errors(self):
         with self.lock:
-            if self.busy or self.encoding or self.desktop_active():return False
+            if self.encoding or self.desktop_active():return False
             changed=False
             for job in self.state['queue']:
-                if job['status']!='errore' or not Path(job['source']).is_file():continue
+                if job['status']!='errore':continue
+                source=Path(job.get('source') or '/nonexistent')
+                if not source.is_file():
+                    candidates=list(Path(job['folder']).glob('*.mkv'))
+                    candidates=[p for p in candidates if '.parziale.' not in p.name and '.interrotto-' not in p.name and not p.name.endswith('_H265.mkv')]
+                    if len(candidates)!=1:continue
+                    source=candidates[0]
+                    try:core.probe(source)
+                    except Exception:continue
+                    job['source']=str(source)
                 out=Path(job['folder'])/(job['name']+'_H265.mkv')
                 if out.exists():continue
                 archived=core.archive_partial(out)
@@ -333,12 +392,13 @@ class Manager:
                     self.set('Verifica','Controllo '+name+'…',99)
                     core.verify(meta,partial,subs,plan)
                     partial.rename(out)
-                    cleanup_error=''
-                    try:core.remove_owned_intermediate(job,out)
-                    except Exception as e:cleanup_error=str(e)
                     job['status']='completato';job['output']=str(out)
-                    if cleanup_error:job['cleanup_error']=cleanup_error
-                    self.set('Verificato',name+' pronto. '+('Intermedio rimasto: '+cleanup_error if cleanup_error else 'Intermedio rimosso.'),100,queue=self.state['queue'])
+                    if job.get('catalog_title'):
+                        try:
+                            write_jellyfin_nfo(folder, job['catalog_title'], job.get('catalog_year'))
+                        except OSError as e:
+                            job['catalog_error'] = str(e)
+                    self.set('Verificato',name+' pronto. Intermedio conservato.',100,queue=self.state['queue'])
                     notify('X99 Ripper: '+name+' completato e verificato.')
                 except Exception as e:
                     job['status']='errore';job['error']=str(e)
@@ -353,7 +413,7 @@ class Manager:
             with self.lock:self.encoding=False
 
 
-manager = Manager()
+manager = None
 
 class Handler(BaseHTTPRequestHandler):
     def allowed(self):
@@ -366,8 +426,22 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed(): return
         if self.path == BASE+'/state':
             with manager.lock:
+                queue = []
+                for job in manager.state['queue']:
+                    item = dict(job)
+                    if item['status'] == 'estrazione':
+                        try:
+                            size = max((p.stat().st_size for p in Path(item['folder']).glob('*.mkv')), default=0)
+                            expected = int(item.get('expected_bytes') or 0)
+                            item['written_gib'] = round(size / 2**30, 2)
+                            item['expected_gib'] = round(expected / 2**30, 2) if expected else None
+                            item['percent'] = min(99, round(size / expected * 100, 1)) if expected else None
+                        except (OSError, ValueError):
+                            pass
+                    queue.append(item)
                 state={**manager.state,'scan_busy':manager.busy,
                        'encode_busy':manager.encoding,'desktop_active':manager.desktop_active(),
+                       'queue':queue,
                        'desktop_jobs':desktop_jobs(),
                        'free_gib':round(shutil.disk_usage(core.ROOT).free/2**30,1)}
                 data = json.dumps(state,ensure_ascii=False).encode()
@@ -386,6 +460,15 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == BASE+'/retry':ok=manager.retry_errors()
         elif self.path in (BASE+'/limit/5',BASE+'/limit/10'):
             ok=manager.set_limit(int(self.path.rsplit('/',1)[1]))
+        elif self.path.startswith(BASE+'/catalog/'):
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 512: raise ValueError
+                payload = json.loads(self.rfile.read(size))
+                index = int(self.path.rsplit('/', 1)[1])
+                ok = manager.set_catalog(index, payload['title'], payload.get('year'))
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                ok = False
         else:
             self.send_error(404);return
         self.reply(json.dumps({'started':ok}).encode(),'application/json')
@@ -397,4 +480,5 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
 
 if __name__ == '__main__':
+    manager = Manager()
     ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
