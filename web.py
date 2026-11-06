@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small browser controller for the OptiPlex DVD workflow."""
 import html
+from datetime import datetime
 import json
 import os
 import re
@@ -26,6 +27,71 @@ ALLOWED_PROXY = os.environ.get('X99_RIPPER_ALLOWED_PROXY', '')
 TELEGRAM_TOKEN = os.environ.get('X99_RIPPER_TELEGRAM_TOKEN', '')
 TELEGRAM_CHAT = os.environ.get('X99_RIPPER_TELEGRAM_CHAT_ID', '')
 DESKTOP_MEDIA_CACHE = {}
+COMPLETED_CUSTOM = bool(os.environ.get('X99_RIPPER_COMPLETED_DIR'))
+COMPLETED_DIR = Path(os.environ.get('X99_RIPPER_COMPLETED_DIR') or core.ROOT).expanduser().resolve()
+
+
+def completed_file(relative):
+    """Resolve a final MKV inside the configured directory, never a source or link."""
+    name = Path(relative)
+    if name.is_absolute() or '..' in name.parts or not name.parts:
+        return None
+    candidate = COMPLETED_DIR / name
+    if candidate.is_symlink() or not candidate.is_file():
+        return None
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(COMPLETED_DIR):
+        return None
+    if resolved.suffix.lower() != '.mkv':
+        return None
+    if not COMPLETED_CUSTOM and not resolved.name.endswith('_H265.mkv'):
+        return None
+    return resolved
+
+
+def completed_files():
+    if not COMPLETED_DIR.is_dir():
+        return []
+    files = []
+    for path in COMPLETED_DIR.rglob('*.mkv'):
+        relative = path.relative_to(COMPLETED_DIR)
+        if completed_file(relative) == path.resolve():
+            files.append(path)
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def films_page():
+    files = completed_files()
+    rows = []
+    for path in files:
+        relative = path.relative_to(COMPLETED_DIR)
+        stat = path.stat()
+        link = BASE + '/films/file?path=' + urllib.parse.quote(relative.as_posix(), safe='')
+        rows.append('<li><div><strong>' + html.escape(path.name) + '</strong><small>' +
+                    html.escape(str(relative.parent)) + ' · ' +
+                    f'{stat.st_size / 2**30:.2f} GiB · ' +
+                    datetime.fromtimestamp(stat.st_mtime).strftime('%d/%m/%Y') +
+                    '</small></div><a href="' + html.escape(link, quote=True) +
+                    '">Scarica</a></li>')
+    listing = ''.join(rows) or '<li class="empty">Nessun film finale trovato in questa cartella.</li>'
+    return ('<!doctype html><html lang="it"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            '<title>Film completati · DiscFlow</title><style>'
+            'body{margin:0;background:#f4f6f3;color:#192e3b;font:16px/1.5 system-ui,sans-serif}'
+            'main{max-width:900px;margin:auto;padding:24px 20px 60px}'
+            'a{color:#176b69;font-weight:650;text-underline-offset:3px}'
+            'a:focus-visible{outline:3px solid #75c9bb;outline-offset:3px}'
+            'h1{font-size:1.75rem;margin:22px 0 4px}p{color:#526877;margin:0 0 22px}'
+            'ul{list-style:none;margin:0;padding:0}li{display:flex;justify-content:space-between;'
+            'align-items:center;gap:18px;background:#fff;border:1px solid #d5dfdc;'
+            'border-radius:12px;padding:16px;margin:9px 0}strong,small{display:block;overflow-wrap:anywhere}'
+            'small{color:#526877;margin-top:3px}.empty{border:1px dashed #b8c8c5;'
+            'border-radius:12px;padding:20px}code{overflow-wrap:anywhere}'
+            '@media(max-width:560px){li{align-items:start;flex-direction:column}}'
+            '</style></head><body><main><a href="' + BASE + '">← Torna a DiscFlow</a>'
+            '<h1>Film completati</h1><p>' + str(len(files)) + ' film in <code>' +
+            html.escape(str(COMPLETED_DIR)) + '</code></p><ul>' + listing +
+            '</ul></main></body></html>')
 
 
 def notify(message):
@@ -445,6 +511,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self.allowed(): return
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == BASE+'/films':
+            self.reply(films_page().encode(), 'text/html; charset=utf-8'); return
+        if parsed.path == BASE+'/films/file':
+            choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+            selected = completed_file(choices[0]) if len(choices) == 1 else None
+            if not selected:
+                self.send_error(404); return
+            self.send_completed_file(selected); return
         if self.path == BASE+'/state':
             with manager.lock:
                 queue = []
@@ -501,6 +576,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header('Content-Type',ctype)
         self.send_header('Cache-Control','no-store'); self.send_header('Content-Length',str(len(body)))
         self.end_headers(); self.wfile.write(body)
+    def send_completed_file(self, path):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" +
+                         urllib.parse.quote(path.name, safe=''))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(path.stat().st_size))
+        self.end_headers()
+        try:
+            with path.open('rb') as stream:
+                while chunk := stream.read(1024 * 1024):
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
     def log_message(self,*args): pass
 
 if __name__ == '__main__':

@@ -1,4 +1,11 @@
-# DiscFlow 0.8.2 · coda DVD e Quadro P1000
+# DiscFlow 0.9.0 · coda DVD e Quadro P1000
+
+La pagina include **Apri cartella film**: mostra nel browser i file finali e
+permette di scaricarli. Per impostazione predefinita legge la cartella di
+output e mostra solo i file `*_H265.mkv`, escludendo gli MKV sorgente. Per una
+cartella distinta imposta `X99_RIPPER_COMPLETED_DIR` nella configurazione
+locale dell'OptiPlex e riavvia il servizio web a coda ferma. In una cartella
+personalizzata mostra tutti gli MKV presenti: scegline una dedicata ai finali.
 
 Per l’uso quotidiano vedi [DiscFlow sull’OptiPlex](docs/USO_OPTIPLEX.md).
 

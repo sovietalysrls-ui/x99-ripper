@@ -2,6 +2,9 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.parse
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -33,6 +36,32 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(len(list(folder.glob('*.interrotto-*.mkv'))), 1)
             self.assertEqual(json.loads(desktop_path.read_text())[0]['status'], 'trasferito')
             self.assertEqual(json.loads(web_path.read_text())['queue'][0]['status'], 'pronto')
+
+    def test_completed_folder_lists_only_final_media_and_serves_it(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(web, 'COMPLETED_DIR', Path(temp)), \
+                mock.patch.object(web, 'COMPLETED_CUSTOM', False):
+            folder = Path(temp) / 'Film'
+            folder.mkdir()
+            final = folder / 'Film & altro_H265.mkv'
+            final.write_bytes(b'final-video')
+            (folder / 'B1_t00.mkv').write_bytes(b'original')
+            server = ThreadingHTTPServer(('127.0.0.1', 0), web.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                base = f'http://127.0.0.1:{server.server_port}/ripper/films'
+                page = urllib.request.urlopen(base, timeout=2).read().decode()
+                self.assertIn('Film &amp; altro_H265.mkv', page)
+                self.assertNotIn('B1_t00.mkv', page)
+                link = base + '/file?path=' + urllib.parse.quote('Film/Film & altro_H265.mkv')
+                self.assertEqual(urllib.request.urlopen(link, timeout=2).read(), b'final-video')
+                self.assertIsNone(web.completed_file('../segreto.mkv'))
+                self.assertIsNone(web.completed_file('Film/B1_t00.mkv'))
+                with mock.patch.object(web, 'COMPLETED_CUSTOM', True):
+                    self.assertEqual(web.completed_file('Film/B1_t00.mkv'), folder / 'B1_t00.mkv')
+            finally:
+                server.shutdown()
+                server.server_close()
 
     def manager(self):
         manager = web.Manager.__new__(web.Manager)
