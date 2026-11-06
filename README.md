@@ -1,5 +1,7 @@
 # DiscFlow 0.8.2 · coda DVD e Quadro P1000
 
+Per l’uso quotidiano vedi [DiscFlow sull’OptiPlex](docs/USO_OPTIPLEX.md).
+
 La pagina web separa lettore e compressione. Puoi scegliere **CPU** (x265
 10 bit, slow, RF22) o **Quadro P1000** (NVENC HEVC 10 bit, medium, CQ28)
 prima di avviare la coda. Se la GPU fallisce, il lavoro resta in errore con
