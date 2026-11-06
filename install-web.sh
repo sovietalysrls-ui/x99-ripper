@@ -12,7 +12,8 @@ cat > "$unit_dir/x99-ripper-web.service" <<EOF
 Description=X99 Ripper browser controller
 After=network-online.target
 [Service]
-Environment=X99_RIPPER_WEB_HOST=$(tailscale ip -4)
+Environment=X99_RIPPER_WEB_HOST=${X99_RIPPER_WEB_HOST:-$(tailscale ip -4)}
+Environment=X99_RIPPER_ALLOWED_PROXY=${X99_RIPPER_ALLOWED_PROXY:-}
 ExecStart=$install_dir/run-web.sh
 Restart=on-failure
 RestartSec=10

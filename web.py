@@ -21,6 +21,7 @@ STATE = core.STATE / 'web-state.json'
 TOKEN = secrets.token_urlsafe(24)
 PORT = int(os.environ.get('X99_RIPPER_WEB_PORT', '8766'))
 HOST = os.environ.get('X99_RIPPER_WEB_HOST', '127.0.0.1')
+ALLOWED_PROXY = os.environ.get('X99_RIPPER_ALLOWED_PROXY', '')
 TELEGRAM_TOKEN = os.environ.get('X99_RIPPER_TELEGRAM_TOKEN', '')
 TELEGRAM_CHAT = os.environ.get('X99_RIPPER_TELEGRAM_CHAT_ID', '')
 
@@ -184,7 +185,14 @@ class Manager:
 manager = Manager()
 
 class Handler(BaseHTTPRequestHandler):
+    def allowed(self):
+        if self.client_address[0] in ('127.0.0.1', ALLOWED_PROXY):
+            return True
+        self.send_error(403)
+        return False
+
     def do_GET(self):
+        if not self.allowed(): return
         if self.path == BASE+'/state':
             with manager.lock: data = json.dumps(manager.state,ensure_ascii=False).encode()
             self.reply(data,'application/json'); return
@@ -197,6 +205,7 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(page.encode(),'text/html; charset=utf-8')
 
     def do_POST(self):
+        if not self.allowed(): return
         if self.path != BASE+'/scan' or not secrets.compare_digest(self.headers.get('X-Ripper-Token',''),TOKEN):
             self.send_error(403); return
         ok = manager.start_scan()
