@@ -101,15 +101,43 @@ class Manager:
                            capture_output=True, text=True)
         return p.returncode == 0
 
+    def mirror_desktop(self):
+        try:
+            jobs = json.loads((core.STATE/'jobs.json').read_text())
+            active = next((j for j in jobs if j['status'] in ('estrazione','compressione','analisi')),None)
+            if not active:
+                self.set('Desktop attivo', 'Il programma desktop è aperto. Chiudilo per usare il controllo web.')
+                return
+            name = active['name']
+            if active['status'] == 'estrazione':
+                folder = Path(active['folder'])
+                size = max((p.stat().st_size for p in folder.glob('*.mkv')),default=0)
+                expected = int(active.get('expected_bytes') or 0)
+                percent = min(99, size/expected*100) if expected else 0
+                self.set('Estrazione desktop', name+' · '+f'{size/2**30:.1f} GiB scritti',percent,job={'name':name})
+            elif active['status'] == 'compressione':
+                logfile = Path(active['folder'])/'compressione.log'
+                tail = logfile.read_bytes()[-5000:].decode(errors='replace') if logfile.exists() else ''
+                matches = re.findall(r'Encoding:.*?(\d+(?:\.\d+)?)\s*%',tail)
+                percent = float(matches[-1]) if matches else 0
+                self.set('Compressione desktop', name+' · '+f'{percent:.1f}%',percent,job={'name':name})
+            else:
+                self.set('Analisi desktop', name,job={'name':name})
+        except (OSError,ValueError,KeyError):
+            self.set('Desktop attivo', 'Il DVD è gestito dalla finestra desktop.')
+
     def watch(self):
         while True:
             try:
                 media = self.media_present()
                 with self.lock: busy = self.busy
-                if media and not self.last_media and not busy and not self.desktop_active():
+                desktop = self.desktop_active()
+                if media and not self.last_media and not busy and not desktop:
                     self.start_scan()
-                elif media and self.desktop_active():
-                    self.set('Desktop attivo', 'Il DVD è gestito dalla finestra desktop. Chiudila dopo il lavoro per usare la pagina web.')
+                elif desktop:
+                    self.mirror_desktop()
+                elif not media and self.state['phase'] in ('Desktop attivo','Estrazione desktop','Compressione desktop','Analisi desktop'):
+                    self.set('Pronto', 'Inserisci un DVD.',0,job=None)
                 self.last_media = media
             except Exception as e:
                 self.set(log='Controllo disco: ' + str(e))
