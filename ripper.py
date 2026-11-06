@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 import uuid
+import webbrowser
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -24,6 +25,8 @@ COPY_ENCODERS = {'aac':'copy:aac', 'ac3':'copy:ac3', 'eac3':'copy:eac3',
     'mp3':'copy:mp3', 'flac':'copy:flac'}
 DURATION = re.compile(r'\b\d{1,2}:\d{2}:\d{2}\b')
 CROP = re.compile(r'autocrop\s*[=:]\s*(\d+)/(\d+)/(\d+)/(\d+)', re.I)
+MAKEMKV_KEY_PAGE = 'https://forum.makemkv.com/forum/viewtopic.php?f=5&t=1053'
+LICENSE_ERROR = re.compile(r'evaluation period (?:has )?expired|shareware functionality unavailable|registration key|activation key|license (?:key|expired)', re.I)
 
 
 def robot_fields(line):
@@ -71,6 +74,33 @@ def disc_label(output):
             if fields[-1] == DEVICE and fields[-2]:return fields[-2]
         except (csv.Error, IndexError):pass
     return ''
+
+
+def disc_type_from_robot(output):
+    for line in output.splitlines():
+        parsed=robot_fields(line)
+        if parsed and parsed[0]=='CINFO' and parsed[1]==1:
+            value=parsed[3].lower()
+            if 'blu-ray' in value or 'bd disc' in value:return 'blu-ray'
+            if 'dvd' in value:return 'dvd'
+    return 'unknown'
+
+
+def optical_properties():
+    try:
+        result=subprocess.run(['udevadm','info','--query=property','--name',DEVICE],
+            capture_output=True,text=True,timeout=5)
+        if result.returncode:return {}
+        return dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)
+    except (OSError,subprocess.TimeoutExpired):return {}
+
+
+def bluray_capable(properties):
+    return any(key.startswith('ID_CDROM_BD') and value=='1' for key,value in properties.items())
+
+
+def bluray_media(properties):
+    return any(key.startswith('ID_CDROM_MEDIA_BD') and value=='1' for key,value in properties.items())
 
 
 def probe(path):
@@ -208,6 +238,10 @@ class App:
         self.last_sizes = {}
         self.last_growth = {}
         self.read_warning = ''
+        self.disc_type = 'unknown'
+        properties=optical_properties()
+        self.drive_bluray_capable = bluray_capable(properties) if properties.get('ID_CDROM')=='1' else None
+        self.bluray_verified = self.load_bluray_verification()
         self.build_ui()
         self.refresh_jobs()
         self.refresh_activity()
@@ -230,6 +264,28 @@ class App:
         tmp = p.with_suffix('.tmp')
         tmp.write_text(json.dumps(self.jobs, indent=2, ensure_ascii=False))
         tmp.replace(p)
+
+    @staticmethod
+    def load_bluray_verification():
+        try:
+            state=json.loads((STATE/'bluray-verification.json').read_text())
+            return bool(state.get('last_success'))
+        except (OSError,ValueError):return False
+
+    def set_bluray_verification(self,verified):
+        self.bluray_verified=verified
+        path=STATE/'bluray-verification.json'
+        tmp=path.with_suffix('.tmp')
+        tmp.write_text(json.dumps({'last_success':time.time() if verified else None}))
+        tmp.replace(path)
+        self.update_bluray_notice()
+
+    def update_bluray_notice(self):
+        if self.disc_type=='blu-ray' and not self.bluray_verified:
+            self.license_notice_var.set('Blu-ray: verifica che la chiave beta o permanente di MakeMKV sia valida prima di estrarre. Dopo una prima estrazione riuscita questo avviso scompare.')
+            self.license_notice.pack(fill='x',pady=(0,8),before=self.titles)
+        else:
+            self.license_notice.pack_forget()
 
     def build_ui(self):
         self.root.configure(bg='#f3f5f8')
@@ -260,7 +316,7 @@ class App:
         activity=ttk.Frame(outer,style='Card.TFrame',padding=14);activity.pack(fill='x',pady=(0,10))
         self.activity_var=tk.StringVar(value='Pronto per un disco')
         ttk.Label(activity,textvariable=self.activity_var,style='Activity.TLabel').pack(anchor='w')
-        self.activity_detail=tk.StringVar(value='Inserisci un DVD e premi Rileva disco.')
+        self.activity_detail=tk.StringVar(value='Inserisci un disco e premi Rileva disco.')
         ttk.Label(activity,textvariable=self.activity_detail,style='Muted.TLabel',wraplength=920).pack(anchor='w',pady=(4,7))
         self.progress=ttk.Progressbar(activity,style='App.Horizontal.TProgressbar',mode='determinate',maximum=100)
         self.progress.pack(fill='x')
@@ -276,7 +332,12 @@ class App:
         ttk.Button(line,text='Apri un MKV',style='App.TButton',command=self.import_mkv).pack(side='right',padx=(0,8))
         self.disk_status=tk.StringVar(value='Nessun disco analizzato.')
         ttk.Label(disc,textvariable=self.disk_status,style='Muted.TLabel',wraplength=920).pack(anchor='w',pady=(0,5))
-        self.titles=ttk.Treeview(disc,columns=('id','name','duration','size'),show='headings',height=2,style='Jobs.Treeview')
+        self.license_notice=ttk.Frame(disc,style='Card.TFrame')
+        self.license_notice_var=tk.StringVar()
+        ttk.Label(self.license_notice,textvariable=self.license_notice_var,style='Warning.TLabel',wraplength=555).pack(side='left')
+        ttk.Button(self.license_notice,text='Apri pagina ufficiale',style='App.TButton',
+            command=lambda:webbrowser.open(MAKEMKV_KEY_PAGE)).pack(side='right',padx=(10,0))
+        self.titles=ttk.Treeview(disc,columns=('id','name','duration','size'),show='headings',height=1,style='Jobs.Treeview')
         for c,label,w in [('id','N.',48),('name','Titolo',360),('duration','Durata',115),('size','Dimensione',145)]:
             self.titles.heading(c,text=label);self.titles.column(c,width=w)
         self.titles.pack(fill='x')
@@ -425,7 +486,7 @@ class App:
             self.warning_var.set(last.get('cleanup_error',''));self.set_progress(100)
         else:
             self.activity_var.set('Pronto per un disco')
-            self.activity_detail.set('Inserisci un DVD e premi Rileva disco. Dopo l’estrazione la compressione parte da sola.')
+            self.activity_detail.set('Inserisci un disco e premi Rileva disco. Dopo l’estrazione la compressione parte da sola.')
             self.warning_var.set('');self.set_progress(0)
         self.root.after(1000,self.refresh_activity)
 
@@ -470,10 +531,16 @@ class App:
         self.status.set('Il lettore sta cercando i titoli del DVD.')
         def work():
             try:
+                properties=optical_properties()
                 with self.drive_lock:
                     p=subprocess.run(['makemkvcon','-r','info','dev:'+DEVICE],capture_output=True,text=True,timeout=180)
                 titles=titles_from_robot(p.stdout)
-                self.events.put(('scan',(titles,disc_label(p.stdout),p.stdout[-1500:],p.returncode)))
+                disc_type=disc_type_from_robot(p.stdout)
+                if disc_type=='unknown' and bluray_media(properties):disc_type='blu-ray'
+                if disc_type=='unknown' and bluray_capable(properties) and LICENSE_ERROR.search(p.stdout):
+                    disc_type='blu-ray'
+                self.events.put(('scan',(titles,disc_label(p.stdout),disc_type,properties,
+                    p.stdout[-1500:],p.returncode,bool(LICENSE_ERROR.search(p.stdout)))))
             except Exception as e:self.events.put(('scan_error',str(e)))
         threading.Thread(target=work,daemon=True).start()
 
@@ -493,7 +560,7 @@ class App:
         if folder.exists():
             messagebox.showerror('Nome già esistente','La cartella esiste già. Scegliere un nome diverso.');return
         folder.mkdir(parents=True)
-        j={'id':uuid.uuid4().hex,'name':name,'status':'estrazione','source':'','output':'','folder':str(folder),'title_id':title_id,'expected_bytes':size,'started_at':time.time(),'error':''}
+        j={'id':uuid.uuid4().hex,'name':name,'status':'estrazione','source':'','output':'','folder':str(folder),'title_id':title_id,'disc_type':self.disc_type,'expected_bytes':size,'started_at':time.time(),'error':''}
         self.jobs.append(j); self.save();self.refresh_jobs();self.extract_busy=True
         self.read_warning=''
         self.status.set('Estrazione avviata. La dimensione del file comparirà qui sopra.')
@@ -502,7 +569,12 @@ class App:
             try:
                 with self.drive_lock:
                     rc=self.run_logged(['makemkvcon','-r','mkv','dev:'+DEVICE,str(title_id),str(folder)],logpath)
-                if rc:raise RuntimeError(f'MakeMKV terminato con codice {rc}. Consultare estrazione.log.')
+                if rc:
+                    recent=logpath.read_text(errors='replace')[-8000:]
+                    if j['disc_type']=='blu-ray' and LICENSE_ERROR.search(recent):
+                        self.events.put(('bluray_license_error',j['id']))
+                        raise RuntimeError('MakeMKV segnala una chiave scaduta o non valida. Apri la pagina ufficiale e registra una chiave valida; intermedio conservato.')
+                    raise RuntimeError(f'MakeMKV terminato con codice {rc}. Consultare estrazione.log.')
                 files=list(folder.glob('*.mkv'))
                 if len(files)!=1:raise RuntimeError(f'Atteso 1 MKV, trovati {len(files)}. Controllare la cartella.')
                 source=files[0]; probe(source)
@@ -686,6 +758,7 @@ class App:
     def refresh_jobs(self):
         current=self.selected_job
         for x in self.job_list.get_children():self.job_list.delete(x)
+        self.job_list.configure(height=max(1,min(3,len(self.jobs))))
         labels={'estrazione':'Estrazione','analisi':'Analisi video','da confermare':'Pronto','in coda':'In coda','compressione':'Compressione','verificato':'Completato','errore':'Errore','interrotto':'Interrotto'}
         for j in self.jobs:
             source=Path(j['source']).name if j.get('source') else '—'
@@ -711,20 +784,37 @@ class App:
                         self.status.set('MakeMKV sta leggendo il DVD.')
                 elif typ=='warning':self.read_warning=data;self.append('AVVISO '+data)
                 elif typ=='scan':
-                    self.scan_busy=False;t,label,tail,rc=data;self.disc_titles=t
+                    self.scan_busy=False;t,label,kind,properties,tail,rc,license_error=data
+                    self.disc_titles=t;self.disc_type=kind
+                    self.drive_bluray_capable=bluray_capable(properties) if properties.get('ID_CDROM')=='1' else None
+                    if kind=='blu-ray' and license_error:self.set_bluray_verification(False)
+                    self.update_bluray_notice()
                     for x in self.titles.get_children():self.titles.delete(x)
+                    self.titles.configure(height=max(1,min(3,len(t))))
                     for x in t:
                         size=int(x['size'] or 0)
                         self.titles.insert('','end',iid=str(x['id']),values=(x['id'],x['name'],x['duration'],self.amount(size) if size else '—'))
                     if t:
                         best=max(t,key=lambda x:(self.seconds(x['duration']),int(x['size'] or 0)))
                         self.titles.selection_set(str(best['id']));self.name_var.set(safe_name(label or best['name'] or 'Film'))
-                        self.disk_status.set(f'{label or "Disco"}: {len(t)} titoli trovati; proposto il più lungo. Controllare la scelta.')
+                        format_name='Blu-ray' if kind=='blu-ray' else 'DVD' if kind=='dvd' else 'disco'
+                        self.disk_status.set(f'{label or format_name}: {len(t)} titoli trovati; proposto il più lungo. Controllare la scelta.')
+                    elif kind=='blu-ray' and license_error:
+                        self.disk_status.set('MakeMKV non ha aperto il Blu-ray: verifica la chiave nella pagina ufficiale.')
+                    elif self.drive_bluray_capable is False:
+                        self.disk_status.set('Nessun titolo leggibile. Se hai inserito un Blu-ray, questo lettore legge solo DVD: serve un lettore Blu-ray.')
                     else:self.disk_status.set('Nessun titolo leggibile. Controllare disco/unità. '+tail[-250:])
                     self.append(tail)
                 elif typ=='scan_error':self.scan_busy=False;self.disk_status.set('Scansione fallita: '+data)
                 elif typ=='extracted':
                     jid,path=data;j=self.by_id(jid);j['source']=path;j['status']='analisi';self.save();self.refresh_jobs();self.status.set('Estratto. Scansione crop in corso.')
+                    if j.get('disc_type')=='blu-ray':
+                        self.set_bluray_verification(True)
+                        self.status.set('Blu-ray estratto correttamente: avviso licenza disattivato.')
+                elif typ=='bluray_license_error':
+                    self.disc_type='blu-ray'
+                    self.set_bluray_verification(False)
+                    self.status.set('Chiave MakeMKV da aggiornare. Apri la pagina ufficiale nel riquadro Disco.')
                 elif typ=='crop':
                     jid,crop,tail=data;j=self.by_id(jid);j['crop']=crop;j['status']='da confermare';self.save();self.refresh_jobs()
                     if self.selected_job==jid:self.select_job()

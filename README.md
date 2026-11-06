@@ -1,4 +1,4 @@
-# X99 Ripper 0.4.1
+# X99 Ripper 0.4.2
 
 Applicazione Linux con interfaccia grafica per estrarre un titolo DVD con MakeMKV e comprimerlo con HandBrake. Versione iniziale per Ubuntu 26.04.1 sull'X99.
 
@@ -19,6 +19,8 @@ sudo snap connect makemkv:removable-media
 ## Licenza MakeMKV
 
 MakeMKV è un programma separato e non è incluso in questo repository. Secondo la [pagina ufficiale](https://www.makemkv.com/buy/index.html), l'uso per DVD/AVCHD è gratuito; le funzioni Blu-ray sono shareware. La licenza acquistata non è mensile e non scade. Per l'eventuale chiave beta aggiornata, usa sempre l'[annuncio ufficiale](https://forum.makemkv.com/forum/viewtopic.php?f=5&t=1053). Questa app non genera, distribuisce o salva chiavi di MakeMKV.
+
+Quando MakeMKV identifica un Blu-ray, l'app mostra un avviso e un pulsante che apre la pagina ufficiale della chiave. L'avviso scompare dopo una prima estrazione Blu-ray riuscita; se una successiva scansione o estrazione segnala una chiave scaduta, ricompare. Viene salvata soltanto la data dell'ultima estrazione Blu-ray riuscita in `~/.local/state/x99-ripper/bluray-verification.json`, mai la chiave. Il lettore `/dev/sr0` verificato sull'X99 è un'unità DVD: per i Blu-ray serve anche un lettore Blu-ray compatibile. Se la scansione non trova titoli, l'app lo segnala separatamente dal controllo della licenza.
 
 ## Avvio
 
