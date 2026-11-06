@@ -62,6 +62,8 @@ def desktop_jobs():
     result = []
     for job in jobs:
         status = job.get('status', '')
+        if status == 'trasferito':
+            continue
         folder = Path(job.get('folder') or '/nonexistent')
         item = {key: job.get(key, '') for key in ('id', 'name', 'status', 'error', 'title_id', 'crop')}
         item['percent'] = None
@@ -111,13 +113,16 @@ class Manager:
     def __init__(self):
         self.lock = threading.RLock()
         self.state = {'phase': 'Pronto', 'detail': 'Inserisci un DVD.', 'percent': 0,
-                      'job': None, 'log': [], 'queue': [], 'max_discs': 10}
+                      'job': None, 'log': [], 'queue': [], 'max_discs': 10,
+                      'encoder': 'cpu'}
         try:
             old = json.loads(STATE.read_text())
             if old.get('phase') not in ('Pronto', 'In attesa', 'Coda terminata', 'Errore'):
                 old['phase'] = 'Interrotto'
                 old['detail'] = 'Il servizio è stato riavviato. Sorgente e parziale sono conservati.'
             self.state.update(old)
+            if self.state.get('encoder') not in ('cpu', 'gpu'):
+                self.state['encoder'] = 'cpu'
             for job in self.state['queue']:
                 if job['status'] in ('compressione', 'estrazione'):
                     job['status']='errore'
@@ -284,7 +289,11 @@ class Manager:
             if not files: raise RuntimeError('Nessun MKV estratto.')
             source = files[0]
             core.probe(source)
-            subprocess.run(['eject',core.DEVICE], capture_output=True, timeout=30)
+            ejected = subprocess.run(['eject',core.DEVICE], capture_output=True, text=True, timeout=30)
+            if ejected.returncode == 0:
+                self.last_media = False
+            else:
+                self.set(log='DVD estratto ma espulsione fallita: '+ejected.stderr[-300:])
             with self.lock:
                 queued['source'] = str(source)
                 queued['size_gib'] = round(source.stat().st_size / 2**30, 1)
@@ -318,6 +327,15 @@ class Manager:
         with self.lock:
             if self.busy or self.encoding:return False
             self.set(max_discs=limit)
+        return True
+
+    def set_encoder(self, value):
+        if value not in ('cpu', 'gpu'):
+            return False
+        with self.lock:
+            if self.encoding or self.desktop_active():
+                return False
+            self.set(encoder=value)
         return True
 
     def set_catalog(self, index, title, year):
@@ -372,6 +390,9 @@ class Manager:
                     self.set('Analisi', 'Preparo '+job['name']+'…',0,job=job)
                 try:
                     source=Path(job['source']);folder=Path(job['folder']);name=job['name']
+                    encoder = ('nvenc_h265_10bit' if self.state.get('encoder') == 'gpu'
+                               else 'x265_10bit')
+                    job['encoder'] = encoder
                     meta=core.probe(source)
                     subs=core.sub_choices(meta)
                     plan=core.audio_plan(meta,core.audio_choices(meta))
@@ -387,7 +408,7 @@ class Manager:
                     if shutil.disk_usage(folder).free < max(4*2**30,source.stat().st_size//4):
                         raise RuntimeError('Spazio insufficiente per comprimere.')
                     self.set('Compressione',name+' · 0%',0,job=job)
-                    rc=self.run(core.hb_command(source,partial,crop_value,plan,subs),folder/'compressione.log',True)
+                    rc=self.run(core.hb_command(source,partial,crop_value,plan,subs,encoder),folder/'compressione.log',True)
                     if rc: raise RuntimeError('HandBrake terminato con codice '+str(rc))
                     self.set('Verifica','Controllo '+name+'…',99)
                     core.verify(meta,partial,subs,plan)
@@ -441,6 +462,7 @@ class Handler(BaseHTTPRequestHandler):
                     queue.append(item)
                 state={**manager.state,'scan_busy':manager.busy,
                        'encode_busy':manager.encoding,'desktop_active':manager.desktop_active(),
+                       'disc_present':manager.media_present(),
                        'queue':queue,
                        'desktop_jobs':desktop_jobs(),
                        'free_gib':round(shutil.disk_usage(core.ROOT).free/2**30,1)}
@@ -460,6 +482,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == BASE+'/retry':ok=manager.retry_errors()
         elif self.path in (BASE+'/limit/5',BASE+'/limit/10'):
             ok=manager.set_limit(int(self.path.rsplit('/',1)[1]))
+        elif self.path in (BASE+'/encoder/cpu', BASE+'/encoder/gpu'):
+            ok=manager.set_encoder(self.path.rsplit('/', 1)[1])
         elif self.path.startswith(BASE+'/catalog/'):
             try:
                 size = int(self.headers.get('Content-Length', '0'))

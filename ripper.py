@@ -153,11 +153,15 @@ def audio_plan(meta, chosen):
     return plan
 
 
-def hb_command(source, output, crop, plan, subs):
+def hb_command(source, output, crop, plan, subs, encoder='x265_10bit'):
     if not re.fullmatch(r'\d+:\d+:\d+:\d+', crop):
         raise ValueError('Crop: usare top:bottom:left:right, quattro numeri.')
+    if encoder not in ('x265_10bit', 'nvenc_h265_10bit'):
+        raise ValueError('Encoder video non supportato.')
+    preset = 'slow' if encoder == 'x265_10bit' else 'medium'
+    quality = '22' if encoder == 'x265_10bit' else '28'
     cmd = HB + ['-i', str(source), '-o', str(output), '-f', 'av_mkv',
-        '-e', 'x265_10bit', '--encoder-preset', 'slow', '-q', '22',
+        '-e', encoder, '--encoder-preset', preset, '-q', quality,
         '--crop-mode', 'custom', '--crop', crop, '-m',
         '-a', ','.join(str(x['index']) for x in plan),
         '-E', ','.join(x['encoder'] for x in plan),

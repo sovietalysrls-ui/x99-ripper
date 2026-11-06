@@ -1,3 +1,4 @@
+import json
 import tempfile
 import threading
 import unittest
@@ -6,9 +7,33 @@ from unittest import mock
 
 import ripper
 import web
+import migrate_desktop
 
 
 class QueueTests(unittest.TestCase):
+    def test_migrates_owned_source_without_deleting_media(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root / 'Film'
+            folder.mkdir()
+            source = folder / 'source.mkv'
+            partial = folder / 'Film_H265.parziale.mkv'
+            source.write_bytes(b'source')
+            partial.write_bytes(b'partial')
+            desktop_path = root / 'jobs.json'
+            web_path = root / 'web-state.json'
+            desktop_path.write_text(json.dumps([{'name': 'Film', 'status': 'in coda',
+                                                 'folder': str(folder), 'source': str(source)}]))
+            web_path.write_text(json.dumps({'queue': []}))
+            with mock.patch.object(ripper, 'probe'):
+                moved = migrate_desktop.migrate(desktop_path, web_path, root)
+            self.assertEqual(moved, ['Film'])
+            self.assertTrue(source.exists())
+            self.assertFalse(partial.exists())
+            self.assertEqual(len(list(folder.glob('*.interrotto-*.mkv'))), 1)
+            self.assertEqual(json.loads(desktop_path.read_text())[0]['status'], 'trasferito')
+            self.assertEqual(json.loads(web_path.read_text())['queue'][0]['status'], 'pronto')
+
     def manager(self):
         manager = web.Manager.__new__(web.Manager)
         manager.lock = threading.RLock()
@@ -31,6 +56,15 @@ class QueueTests(unittest.TestCase):
         with mock.patch.object(web.threading, 'Thread') as thread:
             self.assertTrue(manager.start_encoding())
         thread.return_value.start.assert_called_once()
+
+    def test_gpu_selection_waits_for_idle_encoder(self):
+        manager = self.manager()
+        manager.set = lambda **kwargs: manager.state.update(kwargs)
+        self.assertTrue(manager.set_encoder('gpu'))
+        self.assertEqual(manager.state['encoder'], 'gpu')
+        manager.encoding = True
+        self.assertFalse(manager.set_encoder('cpu'))
+        self.assertEqual(manager.state['encoder'], 'gpu')
 
     def test_recovery_keeps_interrupted_file(self):
         manager = self.manager()
@@ -84,6 +118,10 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index('-s') + 1], '1,2')
         self.assertIn('--subtitle-burned=none', cmd)
         self.assertIn('--subtitle-default=none', cmd)
+        gpu = ripper.hb_command('in.mkv', 'out.mkv', '0:0:0:0', plan,
+                                ripper.sub_choices(meta), 'nvenc_h265_10bit')
+        self.assertEqual(gpu[gpu.index('-e') + 1], 'nvenc_h265_10bit')
+        self.assertEqual(gpu[gpu.index('-q') + 1], '28')
 
 
 if __name__ == '__main__':

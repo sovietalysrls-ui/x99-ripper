@@ -1,10 +1,49 @@
-# DiscFlow AI MVP 0.7.0
+# DiscFlow 0.8.0 · coda DVD e Quadro P1000
+
+La pagina web separa lettore e compressione. Puoi scegliere **CPU** (x265
+10 bit, slow, RF22) o **Quadro P1000** (NVENC HEVC 10 bit, medium, CQ28)
+prima di avviare la coda. Se la GPU fallisce, il lavoro resta in errore con
+MKV sorgente e parziale conservati: seleziona CPU e premi **Riprova lavori con
+errore**. La scelta GPU riguarda la coda web; la finestra desktop continua a
+usare la CPU.
+
+### Misura sulla Quadro P1000 dell'OptiPlex
+
+Su un campione di 60 secondi al minuto 30 di un DVD già acquisito, senza
+audio né sottotitoli per isolare il video:
+
+| Encoder | Tempo | Dimensione |
+| --- | ---: | ---: |
+| CPU x265 10 bit RF22 | 174,3 s | 4,14 MB |
+| Quadro P1000 NVENC 10 bit CQ28 | 2,7 s | 4,70 MB |
+
+Il campione GPU è circa 65 volte più rapido e 14% più grande. Il confronto
+vale per quel tratto del film: non predice esattamente dimensione o qualità di
+ogni DVD. Un secondo campione GPU con audio italiano/inglese e sottotitoli
+IT/EN ha superato la verifica di tracce, flag e decodifica. Per ripetere la
+misura su un'altra scena:
+
+```bash
+python3 benchmark_nvenc.py --start 1800 --gpu-quality 28 \
+  '/percorso/al/sorgente.mkv' "$HOME/Videos/benchmark-nvenc-$(date +%Y%m%d-%H%M%S)"
+```
+
+Per trasferire MKV già acquisiti dalla vecchia coda desktop alla coda web,
+prima ferma il desktop e il servizio web, salva una copia dei due file di stato,
+poi esegui dal repository con la cartella di output configurata:
+
+```bash
+X99_RIPPER_OUTPUT_DIR="$HOME/Videos/X99-Ripper" python3 migrate_desktop.py
+```
+
+Il trasferimento non elimina sorgenti. Archivia il parziale e marca i vecchi
+lavori desktop come trasferiti, così non partono due codifiche dello stesso film.
 
 Questa versione conserva la precedente: il branch `main` e il tag
 `baseline/optiplex-working-0.6.2` restano disponibili. Il branch MVP è
 `feat/discflow-ai-mvp`. Attendi la fine dei lavori attivi prima di installare.
 
-## Novità e prova dell'MVP
+## Funzioni e test
 
 - La pagina web acquisisce i DVD e comprime la coda in processi separati. Dopo
   l'espulsione puoi inserire il disco successivo mentre HandBrake lavora.
@@ -17,14 +56,13 @@ Questa versione conserva la precedente: il branch `main` e il tag
 - Nella pagina web puoi inserire titolo e anno per Jellyfin prima della
   compressione. Dopo la verifica viene creato `movie.nfo`, senza sovrascrivere
   un file esistente. Il programma non inventa metadati se lasci il campo vuoto.
-- `benchmark_nvenc.py` produce campioni CPU e NVENC di 60 secondi conservando
-  output, log e risultati; non modifica l'encoder di produzione.
+- `benchmark_nvenc.py` conserva campioni, log e risultati in una cartella nuova.
 
 Test locali:
 
 ```bash
 PYTHONPATH=. python3 -m unittest discover -s tests -v
-python3 -m py_compile ripper.py web.py benchmark_nvenc.py
+python3 -m py_compile ripper.py web.py benchmark_nvenc.py migrate_desktop.py
 ```
 
 Quando la coda attiva è terminata, aggiorna l'OptiPlex:
@@ -44,14 +82,8 @@ finestra desktop aperta, i comandi web restano sospesi. La coda web richiede
 altro DVD. Per Jellyfin, configura la libreria sulla cartella di destinazione
 già scelta; questo MVP non cambia la configurazione del server Jellyfin.
 
-Per provare NVENC solo a coda ferma:
-
-```bash
-python3 benchmark_nvenc.py '/percorso/al/sorgente.mkv' "$HOME/Videos/benchmark-nvenc-$(date +%Y%m%d-%H%M%S)"
-```
-
 Tempi e dimensioni dei campioni non misurano da soli la qualità visiva.
-Whisper non è attivato nell'MVP: sulle tracce finora viste le lingue risultano
+Whisper non è attivato in questa versione: sulle tracce finora viste le lingue risultano
 etichettate, quindi manca un caso reale in cui usarlo migliorerebbe la scelta.
 Nessun modello viene scaricato o eseguito automaticamente.
 
@@ -95,7 +127,7 @@ Installa `python3-tk`, `handbrake-cli`, `ffmpeg`, `eject` e MakeMKV, poi crea un
 
 ### Pagina web per il DVD in serie
 
-Sul secondo PC esegui `./install-web.sh` dopo aver installato la versione desktop. Il servizio web mostra la pagina `/ripper` alla porta 8766. Se il proxy Cloudflare è su un altro PC della stessa LAN, imposta `X99_RIPPER_WEB_HOST` all'indirizzo LAN del computer con il lettore e `X99_RIPPER_ALLOWED_PROXY` all'indirizzo LAN del proxy prima di installare; le richieste da altri computer ricevono 403. Inserendo un DVD, la pagina sceglie il titolo più lungo, estrae l'MKV, espelle il disco e lo mette **in attesa**. Scegli il limite di 5 o 10 DVD nella pagina e continua a inserire dischi. Quando hai finito, premi **Avvia compressione della coda**: HandBrake analizza crop, audio e sottotitoli e lavora un film alla volta, anche durante la notte. La pagina mostra insieme la coda web e i lavori già avviati nel programma desktop: per ogni film indica titolo scelto, durata, dimensione, stato, avanzamento ed eventuale tempo stimato. Durante la scansione web mostra tutti i titoli rilevati e segnala quello scelto perché più lungo. La pagina mostra progresso ed errori; se un film fallisce, la coda passa al successivo. **Riprova film con errore** conserva il tentativo parziale prima di rimetterlo in coda. L'output e l'MKV intermedio restano nella cartella locale configurata anche dopo la verifica. La coda web è salvata in `~/.local/state/x99-ripper/web-state.json`. Se il programma desktop è aperto, la pagina ne mostra lo stato ma non avvia un lavoro concorrente: completa quel lavoro e chiudi la finestra desktop prima di usare l'automazione web.
+Sul secondo PC esegui `./install-web.sh` dopo aver installato la versione desktop. Il servizio web mostra la pagina `/ripper` alla porta 8766. Se il proxy Cloudflare è su un altro PC della stessa LAN, imposta `X99_RIPPER_WEB_HOST` all'indirizzo LAN del computer con il lettore e `X99_RIPPER_ALLOWED_PROXY` all'indirizzo LAN del proxy prima di installare; le richieste da altri computer ricevono 403. Inserendo un DVD, la pagina sceglie il titolo più lungo, estrae l'MKV, espelle il disco e lo mette **in attesa**. Scegli il limite di 5 o 10 DVD nella pagina e continua a inserire dischi. Quando hai finito, premi **Avvia compressione**: HandBrake analizza crop, audio e sottotitoli e lavora un film alla volta, anche durante la notte. La pagina mostra insieme la coda web e i lavori già avviati nel programma desktop: per ogni film indica titolo scelto, durata, dimensione, stato, avanzamento ed eventuale tempo stimato. Durante la scansione web mostra tutti i titoli rilevati e segnala quello scelto perché più lungo. La pagina mostra progresso ed errori; se un film fallisce, la coda passa al successivo. **Riprova lavori con errore** conserva il tentativo parziale prima di rimetterlo in coda. L'output e l'MKV intermedio restano nella cartella locale configurata anche dopo la verifica. La coda web è salvata in `~/.local/state/x99-ripper/web-state.json`. Se il programma desktop è aperto, la pagina ne mostra lo stato ma non avvia un lavoro concorrente: completa quel lavoro e chiudi la finestra desktop prima di usare l'automazione web.
 
 Per notifiche Telegram, apri il terminale dell'OptiPlex ed esegui `python3 ~/.local/share/x99-ripper/configure-telegram.py`. Inserisci il token del bot personale quando richiesto: non appare sullo schermo. Lo script ti chiede di inviare un breve codice al bot, individua la chat e manda un messaggio di prova. Token e ID chat vengono salvati solo nel file locale `~/.config/x99-ripper/config` con permessi 600, mai nel repository. Le notifiche segnalano completamento o errore; il funzionamento del ripper non dipende da Telegram. Il servizio `x99-ripper-notify-desktop.service` controlla anche i lavori avviati nella finestra desktop e avvisa quando un film entra in coda, richiede conferma, termina o dà errore. Rilegge la configurazione automaticamente. Il trasferimento futuro verso un NAS richiederà un percorso di destinazione e una verifica della copia prima della rimozione locale.
 
