@@ -1,12 +1,30 @@
-# DiscFlow 0.10.0 · coda DVD, catalogo e lettore nel browser
+# DiscFlow 0.11.0 · coda DVD, catalogo e lettore esterno
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
-**Guarda** apre il lettore interno: alla prima visione la Quadro P1000 crea una
-copia MP4 H.264/AAC in `~/.local/state/x99-ripper/previews`; poi il film parte
-nel browser senza scaricare l'MKV. La copia viene creata solo su richiesta e
-non cancella l'originale. La timeline permette di saltare nel film quando la
-copia è pronta. Se la coda di compressione usa la GPU, la preparazione attende.
+**Apri nel lettore** avvia il film in streaming sul dispositivo che apre il
+sito. Sul PC Linux configurato, il gestore `discflow-player://` sceglie VLC,
+mpv, Celluloid, SMPlayer o Parole tra quelli presenti. Per altri PC è
+disponibile **Scarica playlist**: il file M3U è minuscolo e contiene il
+collegamento al film, non il video. Il dispositivo deve raggiungere l'OptiPlex
+tramite Tailscale. Il link scade dopo 24 ore e consente solo la lettura del
+film scelto. Lo stream supporta la ricerca nella timeline.
+
+Se manca un lettore, la scheda film collega lo [ZIP ufficiale di VLC per
+Windows 64 bit](https://download.videolan.org/pub/videolan/vlc/3.0.24/win64/vlc-3.0.24-win64.zip)
+(circa 83 MB). Basta estrarlo e avviare VLC, senza installazione.
+
+Per abilitare l'apertura con un clic su un PC Linux con Tailscale:
+
+```bash
+./install-player-handler.sh IP_TAILSCALE_OPTIPLEX
+```
+
+Sull'OptiPlex configura `X99_RIPPER_TAILSCALE_HOST` con il suo IP Tailscale e
+riavvia solo il servizio web DiscFlow. Su quell'interfaccia il servizio
+accetta soltanto URL del film firmati e a scadenza. La vecchia copia MP4
+eventualmente già preparata resta conservata; la nuova interfaccia non ne
+crea altre.
 
 DiscFlow cerca automaticamente titolo italiano, anno, regista, attori, generi,
 identificativo IMDb e copertina usando Wikidata e Wikipedia. Confronta il nome

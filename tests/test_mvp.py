@@ -102,6 +102,22 @@ class QueueTests(unittest.TestCase):
             self.assertEqual(renamed.name, '1997 - Fuga da New York (1981)_H265.mkv')
             self.assertEqual(film_library.read(renamed)['title'], '1997: Fuga da New York')
 
+    def test_signed_stream_only_serves_final_inside_folder(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(web, 'COMPLETED_DIR', Path(temp)), \
+                mock.patch.object(web, 'TAILSCALE_HOST', '100.107.201.72'), \
+                mock.patch.object(web, 'STREAM_SECRET_FILE', Path(temp) / 'secret'), \
+                mock.patch.object(web, 'STREAM_SECRET', None):
+            final = Path(temp) / 'Film_H265.mkv'
+            final.write_bytes(b'video')
+            url = web.signed_stream_url('Film_H265.mkv', now=1000000000)
+            query = urllib.parse.urlsplit(url).query
+            with mock.patch.object(web.time, 'time', return_value=1000000001):
+                self.assertEqual(web.authorized_stream(query), final)
+                self.assertIsNone(web.authorized_stream(query.replace('Film_H265', 'Other_H265')))
+            with mock.patch.object(web.time, 'time', return_value=1000086401):
+                self.assertIsNone(web.authorized_stream(query))
+
     def manager(self):
         manager = web.Manager.__new__(web.Manager)
         manager.lock = threading.RLock()

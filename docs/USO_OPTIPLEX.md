@@ -12,9 +12,12 @@
 
 Premi **Catalogo e lettore** nella sezione Film. Vedi al massimo otto film per
 pagina, con i più recenti in alto; puoi cercare un titolo, un attore o un
-regista e filtrare per genere. Premi **Guarda** per usare il lettore nel browser.
-La prima volta DiscFlow prepara una copia MP4 con la Quadro P1000; attendi che
-finisca, poi puoi usare la timeline. L'MKV originale resta disponibile con
+regista e filtrare per genere. Premi **Apri nel lettore** per usare VLC o un
+altro programma sul PC da cui apri il sito. Il film viene letto via rete senza
+scaricarlo. Per un altro PC usa **Scarica playlist** e apri il piccolo file M3U
+con il tuo lettore; serve Tailscale per raggiungere l'OptiPlex. Se manca un
+lettore, nella scheda trovi lo ZIP ufficiale di VLC per Windows 64 bit, da
+estrarre senza installazione. L'MKV originale resta disponibile con
 **Scarica l'MKV originale** nella scheda del film.
 
 Titolo italiano, anno, regia, attori e generi vengono cercati automaticamente.
@@ -40,6 +43,6 @@ L'MKV acquisito e gli eventuali tentativi parziali restano nella cartella del fi
 
 ## Versione e ripristino
 
-La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.10.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
+La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.11.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
 
 DiscFlow usa MakeMKV e HandBrake già installati. Non include chiavi né funzioni per aggirare protezioni DRM.

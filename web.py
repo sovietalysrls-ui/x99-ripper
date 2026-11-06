@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Small browser controller for the OptiPlex DVD workflow."""
 import html
+import hashlib
+import hmac
 from datetime import datetime
 import json
 import os
@@ -25,6 +27,7 @@ STATE = core.STATE / 'web-state.json'
 TOKEN = secrets.token_urlsafe(24)
 PORT = int(os.environ.get('X99_RIPPER_WEB_PORT', '8766'))
 HOST = os.environ.get('X99_RIPPER_WEB_HOST', '127.0.0.1')
+TAILSCALE_HOST = os.environ.get('X99_RIPPER_TAILSCALE_HOST', '')
 ALLOWED_PROXY = os.environ.get('X99_RIPPER_ALLOWED_PROXY', '')
 TELEGRAM_TOKEN = os.environ.get('X99_RIPPER_TELEGRAM_TOKEN', '')
 TELEGRAM_CHAT = os.environ.get('X99_RIPPER_TELEGRAM_CHAT_ID', '')
@@ -32,6 +35,52 @@ DESKTOP_MEDIA_CACHE = {}
 COMPLETED_CUSTOM = bool(os.environ.get('X99_RIPPER_COMPLETED_DIR'))
 COMPLETED_DIR = Path(os.environ.get('X99_RIPPER_COMPLETED_DIR') or core.ROOT).expanduser().resolve()
 AUTO_CATALOG_LOCK = threading.Lock()
+STREAM_SECRET_FILE = core.STATE / 'stream-secret'
+STREAM_SECRET_LOCK = threading.Lock()
+STREAM_SECRET = None
+
+
+def stream_secret():
+    global STREAM_SECRET
+    with STREAM_SECRET_LOCK:
+        if STREAM_SECRET is None:
+            STREAM_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with STREAM_SECRET_FILE.open('xb') as output:
+                    os.chmod(STREAM_SECRET_FILE, 0o600)
+                    output.write(os.urandom(32))
+            except FileExistsError:
+                pass
+            STREAM_SECRET = STREAM_SECRET_FILE.read_bytes()
+        return STREAM_SECRET
+
+
+def signed_stream_url(relative, now=None):
+    if not TAILSCALE_HOST:
+        return ''
+    expiry = int(now or time.time()) + 24 * 3600
+    name = relative.as_posix() if isinstance(relative, Path) else relative
+    message = f'{name}|{expiry}'.encode()
+    signature = hmac.new(stream_secret(), message, hashlib.sha256).hexdigest()
+    query = urllib.parse.urlencode({'path': name, 'expires': expiry, 'signature': signature})
+    return f'http://{TAILSCALE_HOST}:{PORT}{BASE}/films/stream?{query}'
+
+
+def authorized_stream(query):
+    params = urllib.parse.parse_qs(query)
+    try:
+        name = params['path'][0]
+        expiry = int(params['expires'][0])
+        signature = params['signature'][0]
+    except (KeyError, ValueError, IndexError):
+        return None
+    now = int(time.time())
+    if not now <= expiry <= now + 24 * 3600 or not re.fullmatch(r'[0-9a-f]{64}', signature):
+        return None
+    expected = hmac.new(stream_secret(), f'{name}|{expiry}'.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        return None
+    return completed_file(name)
 
 
 def completed_file(relative):
@@ -74,6 +123,7 @@ def film_data():
                        'imdb_id': info.get('imdb_id', ''), 'wikidata_id': info.get('wikidata_id', ''),
                        'cover_url': info.get('cover_url', ''), 'cover_source': info.get('cover_source', ''),
                        'source': info.get('source', ''), 'filename': path.name,
+                       'stream_url': signed_stream_url(path.relative_to(COMPLETED_DIR)),
                        'size': path.stat().st_size, 'modified': path.stat().st_mtime})
     return result
 
@@ -565,13 +615,35 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self):
-        if not self.allowed(): return
         parsed = urllib.parse.urlsplit(self.path)
+        if TAILSCALE_HOST and self.server.server_address[0] == TAILSCALE_HOST:
+            if parsed.path != BASE+'/films/stream':
+                self.send_error(403); return
+            selected = authorized_stream(parsed.query)
+            if not selected:
+                self.send_error(403); return
+            self.send_range_file(selected, 'video/x-matroska', False)
+            return
+        if not self.allowed(): return
         if parsed.path == BASE+'/films':
             page = Path(__file__).with_name('films.html').read_text().replace('TOKEN', TOKEN)
             self.reply(page.encode(), 'text/html; charset=utf-8'); return
         if parsed.path == BASE+'/films/data':
             self.reply(json.dumps(film_data(), ensure_ascii=False).encode(), 'application/json'); return
+        if parsed.path == BASE+'/films/playlist':
+            choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+            selected = completed_file(choices[0]) if len(choices) == 1 else None
+            if not selected or not TAILSCALE_HOST: self.send_error(404); return
+            title = film_library.read(selected).get('title') or selected.stem.removesuffix('_H265')
+            body = ('#EXTM3U\n#EXTINF:-1,' + title.replace('\n', ' ') + '\n' +
+                    signed_stream_url(selected.relative_to(COMPLETED_DIR)) + '\n').encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/x-mpegurl; charset=utf-8')
+            self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" +
+                             urllib.parse.quote(selected.stem + '.m3u', safe=''))
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers(); self.wfile.write(body)
+            return
         if parsed.path == BASE+'/films/search':
             query = urllib.parse.parse_qs(parsed.query).get('q', [''])[0]
             try: self.reply(json.dumps(film_library.search(query), ensure_ascii=False).encode(), 'application/json')
@@ -747,4 +819,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     manager = Manager()
     threading.Thread(target=catalog_automatically, daemon=True).start()
+    if TAILSCALE_HOST:
+        threading.Thread(target=ThreadingHTTPServer((TAILSCALE_HOST, PORT), Handler).serve_forever,
+                         daemon=True).start()
     ThreadingHTTPServer((HOST,PORT),Handler).serve_forever()
