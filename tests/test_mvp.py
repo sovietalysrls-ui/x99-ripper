@@ -160,6 +160,39 @@ class QueueTests(unittest.TestCase):
         manager.desktop_active = lambda: False
         return manager
 
+    def test_pending_film_can_save_reviewed_metadata(self):
+        manager = self.manager()
+        manager.set = lambda *args, **kwargs: manager.state.update(kwargs)
+        metadata = {'title': 'La casa dalle finestre che ridono', 'year': 1976,
+                    'wikidata_id': 'Q2602481', 'original_language': 'ita',
+                    'director': ['Pupi Avati']}
+        with mock.patch.object(film_library, 'details', return_value=metadata):
+            self.assertTrue(manager.set_catalog_choice(0, 'Q2602481'))
+        job = manager.state['queue'][0]
+        self.assertEqual(job['catalog_title'], metadata['title'])
+        self.assertEqual(job['catalog_metadata']['director'], ['Pupi Avati'])
+        self.assertEqual(job['original_language'], 'ita')
+
+    def test_delete_pending_job_requires_matching_name_and_preserves_other_folders(self):
+        manager = self.manager()
+        manager.set = lambda *args, **kwargs: manager.state.update(kwargs)
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(ripper, 'ROOT', Path(temp)):
+            folder = Path(temp) / 'DVDVolume'
+            folder.mkdir()
+            source = folder / 'B1_t00.mkv'
+            source.write_bytes(b'dvd')
+            other = Path(temp) / 'Other'
+            other.mkdir()
+            (other / 'keep.mkv').write_bytes(b'keep')
+            manager.state['queue'] = [{'name': folder.name, 'folder': str(folder),
+                                       'source': str(source), 'status': 'pronto'}]
+            self.assertFalse(manager.delete_ready(0, 'Other'))
+            self.assertTrue(source.exists())
+            self.assertTrue(manager.delete_ready(0, folder.name))
+            self.assertFalse(folder.exists())
+            self.assertTrue((other / 'keep.mkv').exists())
+            self.assertEqual(manager.state['queue'], [])
+
     def test_acquisition_can_start_during_encoding(self):
         manager = self.manager()
         manager.encoding = True

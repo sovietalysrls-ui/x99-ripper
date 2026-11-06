@@ -1,4 +1,4 @@
-# DiscFlow 0.14.0 · coda DVD, catalogo e app Android
+# DiscFlow 0.15.0 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -212,3 +212,7 @@ La transcodifica conserva una traccia italiana come predefinita, una spagnola se
 ## Titoli non riconosciuti
 
 Nel catalogo i film senza metadati verificati mostrano **Trova titolo**. Se il riconoscimento automatico non trova un film, DiscFlow chiede un indizio: bastano poche parole, anche con un piccolo errore, per esempio `case ridono`. La ricerca combina Wikidata e la ricerca italiana di Wikipedia con tolleranza agli errori. Il risultato resta una proposta: verifica titolo, anno e regista prima di confermarlo.
+
+## Film in attesa: ricerca e rimozione
+
+Nella pagina principale, ogni film pronto offre **Cerca**: scrivi anche poche parole imprecise, scegli il risultato e premi **Conferma film**. DiscFlow conserva la selezione nella coda e, dopo la compressione, usa titolo italiano, anno, regista, attori, generi e copertina per file e catalogo Jellyfin. **Salva solo titolo** resta disponibile per una correzione manuale. **Elimina** rimuove un singolo lavoro pronto e tutti i file della sua cartella solo dopo una conferma che mostra nome e percorso; i lavori attivi e le cartelle esterne non possono essere eliminati da questo comando.

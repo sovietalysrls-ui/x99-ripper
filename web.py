@@ -514,7 +514,41 @@ class Manager:
             if job['status'] != 'pronto': return False
             job['catalog_title'] = title
             job['catalog_year'] = year or None
+            job.pop('catalog_metadata', None)
             self.set(queue=self.state['queue'])
+        return True
+
+    def set_catalog_choice(self, index, qid):
+        metadata = film_library.details(qid)
+        if not metadata.get('title') or not metadata.get('year'):
+            return False
+        with self.lock:
+            if not 0 <= index < len(self.state['queue']): return False
+            job = self.state['queue'][index]
+            if job['status'] != 'pronto': return False
+            job['catalog_title'] = metadata['title']
+            job['catalog_year'] = metadata['year']
+            job['catalog_metadata'] = metadata
+            job['original_language'] = metadata.get('original_language', '')
+            self.set(queue=self.state['queue'])
+        return True
+
+    def delete_ready(self, index, confirm_name):
+        with self.lock:
+            if self.busy or self.encoding or self.desktop_active(): return False
+            if not 0 <= index < len(self.state['queue']): return False
+            job = self.state['queue'][index]
+            if job['status'] != 'pronto' or job['name'] != confirm_name: return False
+            folder = Path(job['folder'])
+            root = core.ROOT.resolve()
+            if folder.is_symlink() or folder.resolve().parent != root or not folder.is_dir(): return False
+            source = Path(job.get('source') or '')
+            if source.resolve().parent != folder.resolve() or not source.is_file(): return False
+            if any(p.is_symlink() or p.is_dir() for p in folder.iterdir()): return False
+            shutil.rmtree(folder)
+            queue = self.state['queue'][:index] + self.state['queue'][index + 1:]
+            self.set('In attesa', confirm_name + ' eliminato dalla coda e dal disco.', 0,
+                     queue=queue, job=None)
         return True
 
     def retry_errors(self):
@@ -593,11 +627,15 @@ class Manager:
                     job['status']='completato';job['output']=str(out)
                     if job.get('catalog_title'):
                         try:
-                            write_jellyfin_nfo(folder, job['catalog_title'], job.get('catalog_year'))
-                        except OSError as e:
+                            metadata = job.get('catalog_metadata') or {
+                                'title': job['catalog_title'], 'year': job.get('catalog_year')}
+                            renamed = film_library.save(out, metadata)
+                            job['output'] = str(renamed)
+                        except (OSError, ValueError, FileExistsError) as e:
                             job['catalog_error'] = str(e)
                     self.set('Verificato',name+' pronto. Intermedio conservato.',100,queue=self.state['queue'])
-                    threading.Thread(target=catalog_automatically, args=([out],), daemon=True).start()
+                    if not job.get('catalog_title'):
+                        threading.Thread(target=catalog_automatically, args=([out],), daemon=True).start()
                     notify('X99 Ripper: '+name+' completato e verificato.')
                 except Exception as e:
                     job['status']='errore';job['error']=str(e)
@@ -780,12 +818,15 @@ class Handler(BaseHTTPRequestHandler):
             ok=manager.set_encoder(self.path.rsplit('/', 1)[1])
         elif self.path.startswith(BASE+'/catalog/'):
             try:
-                size = int(self.headers.get('Content-Length', '0'))
-                if not 0 < size <= 512: raise ValueError
-                payload = json.loads(self.rfile.read(size))
+                payload = self.read_json()
                 index = int(self.path.rsplit('/', 1)[1])
-                ok = manager.set_catalog(index, payload['title'], payload.get('year'))
-            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                if payload.get('delete') is True:
+                    ok = manager.delete_ready(index, payload.get('confirm_name'))
+                elif payload.get('wikidata_id'):
+                    ok = manager.set_catalog_choice(index, payload['wikidata_id'])
+                else:
+                    ok = manager.set_catalog(index, payload['title'], payload.get('year'))
+            except (ValueError, KeyError, TypeError, OSError, TimeoutError, json.JSONDecodeError):
                 ok = False
         else:
             self.send_error(404);return
