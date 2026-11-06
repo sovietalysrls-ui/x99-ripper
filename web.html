@@ -102,7 +102,8 @@ function render(s){
   $('count').textContent=all.length+' film';
   const active=all.filter(([j])=>['estrazione','compressione','analisi'].includes(j.status));
   $('phase').textContent=active.length?active.length===1?'1 film in lavorazione':active.length+' film in lavorazione':s.phase||'Pronto';
-  $('detail').textContent=s.desktop_active?'La finestra desktop è aperta. Qui puoi seguire i lavori; per usare i comandi web, chiudila quando ha finito.':s.detail||'Inserisci un DVD.';
+  const extracting=web.find(j=>j.status==='estrazione'),encoding=web.find(j=>j.status==='compressione');
+  $('detail').textContent=s.desktop_active?'La finestra desktop è aperta. Qui puoi seguire i lavori; per usare i comandi web, chiudila quando ha finito.':extracting&&encoding?`${extracting.name} in acquisizione · ${encoding.name} in compressione${encoding.percent!==undefined?' ('+Number(encoding.percent).toFixed(1)+'%)':''}`:s.detail||'Inserisci un DVD.';
   const pending=web.filter(j=>j.status==='pronto'||j.status==='compressione').length;
   $('disc-state').textContent=s.scan_busy?'Lettura in corso':s.desktop_active?'Gestito dal desktop':pending>=s.max_discs?'Coda piena':s.disc_present?'Disco inserito':'Pronto';
   $('disc-detail').textContent=s.scan_busy?'Attendi l’espulsione, poi inserisci il prossimo DVD.':s.desktop_active?'Il programma desktop sta usando il lettore.':pending>=s.max_discs?'Avvia o completa la compressione prima di acquisire altri DVD.':'Inserisci un DVD. Dopo l’espulsione puoi sostituirlo mentre l’altro film viene compresso.';
