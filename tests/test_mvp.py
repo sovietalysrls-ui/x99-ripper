@@ -94,6 +94,14 @@ class QueueTests(unittest.TestCase):
                 film_library.save(source, {'title': 'Film', 'year': 2000})
             self.assertTrue(source.exists())
 
+    def test_italian_title_with_colon_keeps_catalog_title(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'Escape NY_H265.mkv'
+            source.write_bytes(b'video')
+            renamed = film_library.save(source, {'title': '1997: Fuga da New York', 'year': 1981})
+            self.assertEqual(renamed.name, '1997 - Fuga da New York (1981)_H265.mkv')
+            self.assertEqual(film_library.read(renamed)['title'], '1997: Fuga da New York')
+
     def manager(self):
         manager = web.Manager.__new__(web.Manager)
         manager.lock = threading.RLock()

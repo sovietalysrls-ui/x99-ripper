@@ -164,7 +164,7 @@ def read(path):
 
 def safe_title(title):
     title = title.strip()
-    if not title or len(title) > 120 or any(ord(c) < 32 or c in '/\\:<>|?*' for c in title):
+    if not title or len(title) > 120 or any(ord(c) < 32 or c in '/\\<>|?*' for c in title):
         raise ValueError('Titolo non valido per un nome di file.')
     return title.rstrip('. ')
 
@@ -175,7 +175,8 @@ def save(path, metadata):
     year = metadata.get('year')
     if year is not None and not 1888 <= int(year) <= 2100:
         raise ValueError('Anno non valido.')
-    stem = title + (f' ({year})' if year else '')
+    filename_title = re.sub(r'\s*:\s*', ' - ', title)
+    stem = filename_title + (f' ({year})' if year else '')
     target = path.with_name(stem + '_H265.mkv')
     if target != path and target.exists():
         raise FileExistsError('Esiste già un film con questo titolo. Nessun file è stato cambiato.')
