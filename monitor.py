@@ -21,6 +21,18 @@ def last_percent(path):
         return float(matches[-1]) if matches else None
     except OSError:return None
 
+def process_active(stage):
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():continue
+        try:
+            name=(proc/'comm').read_text().strip()
+            if stage=='compressione' and name=='HandBrakeCLI':return True
+            if stage=='estrazione' and name=='makemkvcon':
+                args=(proc/'cmdline').read_bytes().replace(b'\0',b' ')
+                if b' -r mkv ' in args:return True
+        except (OSError,PermissionError):pass
+    return False
+
 class Monitor:
     def __init__(self):
         root=tk.Tk();self.root=root
@@ -40,7 +52,7 @@ class Monitor:
         ttk.Label(frame,textvariable=self.detail,wraplength=600).pack(anchor='w',pady=(0,13))
         self.bar=ttk.Progressbar(frame,maximum=100);self.bar.pack(fill='x',pady=(0,15))
         ttk.Label(frame,textvariable=self.note,style='Small.TLabel',wraplength=600).pack(anchor='w')
-        self.last_size=0;self.last_growth=time.monotonic();self.mode='determinate'
+        self.last_size=0;self.last_growth=time.monotonic();self.mode='determinate';self.missing_count=0
         root.after(100,self.update)
         root.mainloop()
     def update(self):
@@ -53,7 +65,16 @@ class Monitor:
         else:
             name=job.get('name','Film');stage=job.get('status','')
             folder=Path(job.get('folder','/nonexistent'))
-            if stage=='estrazione':
+            if stage in {'estrazione','compressione'}:
+                self.missing_count=0 if process_active(stage) else self.missing_count+1
+            else:self.missing_count=0
+            if stage in {'estrazione','compressione'} and self.missing_count>=3:
+                percent=last_percent(folder/'compressione.log') if stage=='compressione' else None
+                self.title.set('Lavorazione interrotta · '+name)
+                self.detail.set(f'HandBrake non è più attivo. Ultimo avanzamento: {percent:.2f}%.' if percent is not None else 'Il processo non è più attivo.')
+                self.bar.stop();self.bar.configure(mode='determinate',value=percent or 0);self.mode='determinate'
+                self.note.set('L’MKV originale è salvo. Apri X99 Ripper aggiornato e premi Riprova compressione.')
+            elif stage=='estrazione':
                 files=list(folder.glob('*.mkv'))
                 size=max((p.stat().st_size for p in files),default=0)
                 if size>self.last_size:self.last_growth=time.monotonic()

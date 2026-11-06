@@ -1,4 +1,4 @@
-# X99 Ripper 0.4.2
+# X99 Ripper 0.4.3
 
 Applicazione Linux con interfaccia grafica per estrarre un titolo DVD con MakeMKV e comprimerlo con HandBrake. Versione iniziale per Ubuntu 26.04.1 sull'X99.
 
@@ -48,7 +48,7 @@ Puoi provare il percorso di scansione e compressione con **Importa MKV esistente
 
 ## Spazio ed errori
 
-Prima dell'estrazione richiede spazio pari almeno alla dimensione dichiarata del titolo più 8 GiB, e comunque almeno 12 GiB. Prima della compressione richiede almeno 4 GiB o un quarto della dimensione dell'MKV sorgente. Sono margini prudenti, non una stima esatta dell'output: controlla lo spazio libero mostrato nell'app. Un errore lascia sorgente, file parziale e log disponibili. **Riprova** rimette in conferma un intermedio valido; un `.parziale.mkv` va esaminato e spostato prima di un nuovo tentativo. La coda è salvata in `~/.local/state/x99-ripper/jobs.json` e riprende i lavori in attesa dopo il riavvio; le operazioni interrotte richiedono revisione.
+Prima dell'estrazione richiede spazio pari almeno alla dimensione dichiarata del titolo più 8 GiB, e comunque almeno 12 GiB. Prima della compressione richiede almeno 4 GiB o un quarto della dimensione dell'MKV sorgente. Sono margini prudenti, non una stima esatta dell'output: controlla lo spazio libero mostrato nell'app. Un errore lascia sorgente, file parziale e log disponibili. Se la compressione si interrompe, la schermata principale mostra **Riprova compressione**: l'app rinomina il file `.parziale.mkv` in `.interrotto-DATA.mkv`, lo conserva e avvia automaticamente un nuovo tentativo dall'MKV originale. La coda è salvata in `~/.local/state/x99-ripper/jobs.json` e riprende i lavori in attesa dopo il riavvio. Il programma ignora il segnale SIGHUP del terminale; per un avvio indipendente dal terminale usa comunque la voce nel menu applicazioni.
 
 ## Limiti di questa prima versione
 

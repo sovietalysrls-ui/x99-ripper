@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import re
+import signal
 import shutil
 import subprocess
 import threading
@@ -218,6 +219,21 @@ def remove_owned_intermediate(job, output):
     return True
 
 
+def archive_partial(output):
+    """Keep an interrupted encode intact before starting a new attempt."""
+    output=Path(output)
+    partial=output.with_name(output.stem+'.parziale.mkv')
+    if not partial.exists():return None
+    stamp=time.strftime('%Y%m%d-%H%M%S')
+    archived=output.with_name(output.stem+f'.interrotto-{stamp}.mkv')
+    counter=1
+    while archived.exists():
+        archived=output.with_name(output.stem+f'.interrotto-{stamp}-{counter}.mkv')
+        counter+=1
+    partial.rename(archived)
+    return archived
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -254,7 +270,9 @@ class App:
             jobs = json.loads((STATE / 'jobs.json').read_text())
             for j in jobs:
                 if j['status'] in {'estrazione', 'compressione'}:
-                    j['status'] = 'interrotto'; j['error'] = 'Operazione interrotta: verificare i file e riprovare.'
+                    j['interrupted_stage']=j['status']
+                    j['status']='interrotto'
+                    j['error']='Il programma si è chiuso durante il lavoro. L’MKV originale è conservato; premi Riprova compressione.' if j['interrupted_stage']=='compressione' else 'Il programma si è chiuso durante l’estrazione. Controlla la cartella e ripeti dal disco.'
             return jobs
         except (FileNotFoundError, ValueError):
             return []
@@ -323,6 +341,7 @@ class App:
         self.progress_mode='determinate'
         self.warning_var=tk.StringVar(value='')
         ttk.Label(activity,textvariable=self.warning_var,style='Warning.TLabel',wraplength=920).pack(anchor='w',pady=(5,0))
+        self.retry_action=ttk.Button(activity,text='Riprova compressione',style='Primary.TButton',command=self.retry)
 
         disc=ttk.Frame(outer,style='Card.TFrame',padding=12);disc.pack(fill='x',pady=(0,10))
         self.disc_card=disc
@@ -430,7 +449,12 @@ class App:
         encoding=next((j for j in self.jobs if j['status']=='compressione'),None)
         analyzing=next((j for j in self.jobs if j['status']=='analisi'),None)
         queued=next((j for j in self.jobs if j['status']=='in coda'),None)
-        failed=next((j for j in reversed(self.jobs) if j['status']=='errore'),None)
+        failed=next((j for j in reversed(self.jobs) if j['status'] in {'errore','interrotto'}),None)
+        can_retry=bool(failed and not (extracting or encoding or self.scan_busy or analyzing or queued)
+            and failed.get('source') and Path(failed['source']).is_file())
+        if can_retry:
+            if not self.retry_action.winfo_manager():self.retry_action.pack(anchor='w',pady=(10,0))
+        else:self.retry_action.pack_forget()
         if extracting:
             folder=Path(extracting['folder'])
             files=list(folder.glob('*.mkv'))
@@ -477,7 +501,7 @@ class App:
         elif failed:
             self.activity_var.set('Serve attenzione · '+failed['name'])
             self.activity_detail.set(failed.get('error') or 'Controlla il log e riprova.')
-            self.warning_var.set('Intermedio conservato. Apri i dettagli per recuperare il lavoro.')
+            self.warning_var.set('L’MKV originale e il file parziale sono conservati.' if can_retry else 'Controlla la cartella prima di ripetere l’estrazione.')
             self.set_progress(0)
         elif self.jobs and self.jobs[-1]['status']=='verificato':
             last=self.jobs[-1]
@@ -732,12 +756,22 @@ class App:
 
     def retry(self):
         j=self.selected()
+        if not j or j['status'] not in {'errore','interrotto'}:
+            j=next((x for x in reversed(self.jobs) if x['status'] in {'errore','interrotto'}),None)
         if not j or j['status'] not in {'errore','interrotto'}:return
         if j.get('source') and Path(j['source']).is_file():
-            p=Path(j.get('output') or '')
-            if p.name and p.with_name(p.stem+'.parziale.mkv').exists():
-                messagebox.showerror('Parziale','Esaminare il file .parziale.mkv nella cartella; poi rinominarlo o spostarlo prima di riprovare.');return
-            j['status']='da confermare';j['error']='';self.save();self.refresh_jobs();self.select_job()
+            try:
+                output=Path(j.get('output') or '')
+                if output.name and output.exists():
+                    raise RuntimeError('Output finale già presente: controlla la cartella.')
+                archived=archive_partial(output) if output.name else None
+                if archived:
+                    j.setdefault('previous_partials',[]).append(str(archived))
+                    self.append('Tentativo interrotto conservato: '+str(archived))
+                j['status']='da confermare';j['error']='';self.save();self.refresh_jobs()
+                self.queue_encode(j['id'])
+                self.status.set('Nuova compressione accodata dall’MKV originale.')
+            except Exception as exc:messagebox.showerror('Riprova compressione',str(exc))
         else:messagebox.showinfo('Estrazione','Inserire di nuovo il disco e avviare una nuova estrazione. La cartella del tentativo precedente resta intatta.')
 
     def open_folder(self):
@@ -856,4 +890,5 @@ class App:
 
 
 if __name__=='__main__':
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
     root=tk.Tk(); App(root);root.mainloop()
