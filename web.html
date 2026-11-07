@@ -57,9 +57,9 @@ function make(tag, cls, text){const el=document.createElement(tag);if(cls)el.cla
 function duration(seconds){if(!seconds)return '';const h=Math.floor(seconds/3600),m=Math.floor(seconds%3600/60),s=Math.floor(seconds%60);return [h,m,s].map(x=>String(x).padStart(2,'0')).join(':')}
 function renderJob(j,source){
   const card=make('article','job'),top=make('div','job-top'),left=make('div');
-  left.append(make('div','job-name',j.name||'Film senza nome'));
+  const displayName=j.catalog_title||j.name||'Film senza nome';const name=make('div','job-name',displayName);if(j.catalog_title&&j.catalog_title!==j.name)name.title='Disco: '+j.name;left.append(name);
   const meta=[];
-  if(j.title_id!==undefined&&j.title_id!==''&&j.title_id!==null)meta.push('Titolo '+j.title_id);
+  if(j.status!=='completato'&&j.title_id!==undefined&&j.title_id!==''&&j.title_id!==null)meta.push('Titolo '+j.title_id);
   if(j.duration||j.duration_seconds)meta.push('Durata '+(j.duration||duration(j.duration_seconds)));
   if(j.size_gib)meta.push(j.size_gib+' GiB');
   if(j.encoder)meta.push(j.encoder.startsWith('nvenc')?'GPU':'CPU');
