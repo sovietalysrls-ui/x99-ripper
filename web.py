@@ -668,7 +668,9 @@ class Manager:
                 with self.lock:
                     queued['recovery'] = {'phase': stats['phase'], 'percent': stats['percent'],
                                           'bad_gib': round(stats['bad'] / 2**30, 2),
-                                          'remaining_gib': round(remaining / 2**30, 2)}
+                                          'remaining_gib': round(remaining / 2**30, 2),
+                                          'read_gib': round(stats['finished'] / 2**30, 2),
+                                          'total_gib': round(stats['total'] / 2**30, 2)}
                     self.set('Recupero',
                              name + ' · ' + f"{stats['percent']:.1f}% · {stats['phase']}",
                              stats['percent'], job=queued, queue=self.state['queue'])

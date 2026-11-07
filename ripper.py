@@ -735,7 +735,8 @@ class App:
                 def progress(stats):
                     remaining=stats['total']-stats['finished']-stats['bad']
                     self.events.put(('rescue',(j['id'],{'phase':stats['phase'],'percent':stats['percent'],
-                        'bad_gib':round(stats['bad']/2**30,2),'remaining_gib':round(remaining/2**30,2)})))
+                        'bad_gib':round(stats['bad']/2**30,2),'remaining_gib':round(remaining/2**30,2),
+                        'read_gib':round(stats['finished']/2**30,2),'total_gib':round(stats['total']/2**30,2)})))
                 recover.rescue_iso(DEVICE,iso,mapfile,rescue_log,progress)
                 stats=recover.map_stats(mapfile)
                 if not stats['finished']:raise RuntimeError('Nessun dato leggibile dal disco. Consultare recupero.log.')
