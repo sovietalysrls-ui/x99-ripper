@@ -40,7 +40,7 @@ web quando la coda è ferma.
 
 **Verificato** significa che il file finale è presente, ha durata e tracce previste e che due campioni video sono stati decodificati senza errore. L'audio italiano, se presente, è predefinito. I sottotitoli italiani e inglesi sono selezionabili ma non partono da soli.
 
-L'MKV acquisito viene rimosso automaticamente 48 ore dopo la verifica del film finale. Per i film già acquisiti prima di questa versione, le 48 ore partono dall'installazione. Nella tabella dei lavori puoi premere **Rimuovi originale** per eliminarlo prima, con conferma sul singolo film. Il film finale e gli eventuali tentativi parziali restano disponibili.
+L'MKV acquisito viene rimosso automaticamente 48 ore dopo la verifica del film finale. Per i film già acquisiti prima di questa versione, le 48 ore partono dall'installazione. Nella tabella dei lavori puoi premere **Elimina originale** nella colonna **Azioni** per eliminarlo prima, con conferma sul singolo film. Il film finale e gli eventuali tentativi parziali restano disponibili.
 
 ## Se compare un errore
 
@@ -51,7 +51,7 @@ L'MKV acquisito viene rimosso automaticamente 48 ore dopo la verifica del film f
 
 ## Versione e ripristino
 
-La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.17.2`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
+La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.17.3`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
 
 DiscFlow usa MakeMKV e HandBrake già installati. Non include chiavi né funzioni per aggirare protezioni DRM.
 

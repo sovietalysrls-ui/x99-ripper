@@ -1,4 +1,4 @@
-# DiscFlow 0.17.2 · coda DVD, catalogo e app Android
+# DiscFlow 0.17.3 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -223,4 +223,4 @@ La lista operativa dei film è una tabella compatta: intestazioni ordinabili, fi
 
 La dashboard mostra un grafico a torta di MKV originali acquisiti, file di lavoro e anteprime, film finali e spazio libero. I dati del sistema non compaiono e non sono inclusi nel totale del grafico. I valori si aggiornano ogni 15 secondi.
 
-L'MKV originale viene rimosso automaticamente 48 ore dopo la verifica del film finale. Per i film già presenti al momento dell'aggiornamento, le 48 ore partono dall'installazione della nuova versione. Puoi rimuoverlo prima con **Rimuovi originale** e una conferma sul singolo film. Il film finale e gli eventuali file parziali restano.
+L'MKV originale viene rimosso automaticamente 48 ore dopo la verifica del film finale. Per i film già presenti al momento dell'aggiornamento, le 48 ore partono dall'installazione della nuova versione. Puoi eliminarlo prima con **Elimina originale** nella colonna **Azioni** e una conferma sul singolo film. Il film finale e gli eventuali file parziali restano.
