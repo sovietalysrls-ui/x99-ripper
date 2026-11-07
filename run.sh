@@ -11,6 +11,9 @@ for tool in python3 makemkvcon ffprobe ffmpeg eject; do
     exit 1
   fi
 done
+if ! command -v ddrescue >/dev/null 2>&1; then
+  printf 'Avviso: ddrescue non trovato (sudo apt install gddrescue). La modalità recupero dei dischi rovinati resterà disabilitata.\n' >&2
+fi
 if ! command -v HandBrakeCLI >/dev/null 2>&1; then
   if ! command -v flatpak >/dev/null 2>&1 || ! flatpak info fr.handbrake.ghb >/dev/null 2>&1; then
     printf 'Manca HandBrakeCLI o HandBrake Flatpak.\n' >&2

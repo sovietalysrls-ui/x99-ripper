@@ -30,6 +30,7 @@ def process_active(stage):
             if stage=='estrazione' and name=='makemkvcon':
                 args=(proc/'cmdline').read_bytes().replace(b'\0',b' ')
                 if b' -r mkv ' in args:return True
+            if stage=='recupero' and name=='ddrescue':return True
         except (OSError,PermissionError):pass
     return False
 
@@ -65,7 +66,7 @@ class Monitor:
         else:
             name=job.get('name','Film');stage=job.get('status','')
             folder=Path(job.get('folder','/nonexistent'))
-            if stage in {'estrazione','compressione'}:
+            if stage in {'estrazione','compressione','recupero'}:
                 self.missing_count=0 if process_active(stage) else self.missing_count+1
             else:self.missing_count=0
             if stage in {'estrazione','compressione'} and self.missing_count>=3:
@@ -74,6 +75,15 @@ class Monitor:
                 self.detail.set(f'HandBrake non è più attivo. Ultimo avanzamento: {percent:.2f}%.' if percent is not None else 'Il processo non è più attivo.')
                 self.bar.stop();self.bar.configure(mode='determinate',value=percent or 0);self.mode='determinate'
                 self.note.set('L’MKV originale è salvo. Apri X99 Ripper aggiornato e premi Riprova compressione.')
+            elif stage=='recupero':
+                st=job.get('rescue') or {}
+                percent=st.get('percent') or 0
+                total=st.get('total') or 0
+                pending=max(0,total-(st.get('finished') or 0))
+                self.title.set('Recupero disco · '+name)
+                self.detail.set(f'{percent:.1f}% letto · fase {st.get("phase","")} · da recuperare {amount(pending)} · irrecuperabili {amount(st.get("bad",0))}')
+                self.bar.stop();self.bar.configure(mode='determinate',value=percent);self.mode='determinate'
+                self.note.set('ddrescue copia il disco in più giri per salvare tutto il salvabile. Chiudi pure questa finestra: il lavoro continua.')
             elif stage=='estrazione':
                 files=list(folder.glob('*.mkv'))
                 size=max((p.stat().st_size for p in files),default=0)
