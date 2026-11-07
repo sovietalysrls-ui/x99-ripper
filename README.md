@@ -148,6 +148,7 @@ Applicazione Linux con interfaccia grafica per estrarre un titolo DVD con MakeMK
 - MakeMKV Snap 1.18.3: `makemkvcon` in `/snap/bin`; la sintassi locale conferma `info dev:/dev/sr0` e `mkv dev:/dev/sr0 <titolo> <cartella>`.
 - HandBrake Flatpak `fr.handbrake.ghb` 1.11.2, con `HandBrakeCLI` interno; la sintassi locale e una codifica breve confermano HEVC 10-bit, preset `slow`, RF22, selezione audio, crop personalizzato, sottotitoli senza default né burn.
 - Python 3 con Tkinter, `ffprobe`, `ffmpeg`, `eject`.
+- Per la modalità recupero dischi rovinati: GNU ddrescue (`sudo apt install gddrescue`).
 - Samsung montato in `/mnt/x99`; cartella `/mnt/x99/DVD_RIPPATI` scrivibile. Al controllo erano liberi circa 81 GiB.
 - Lettore ottico `/dev/sr0`.
 
@@ -196,6 +197,19 @@ Per notifiche Telegram, apri il terminale dell'OptiPlex ed esegui `python3 ~/.lo
 6. Dopo la verifica, l'app conserva l'MKV intermedio. Il pulsante **Rimuovi intermedio** permette di eliminarlo soltanto dopo una conferma esplicita nella versione desktop.
 
 Puoi provare il percorso di scansione e compressione con **Importa MKV esistente**, senza inserire un disco. La cartella dell'MKV importato resta intatta.
+
+## Modalità recupero per dischi rovinati
+
+Per DVD graffiati, opachi o con l'etichetta che ha rovinato il supporto, la modalità recupero copia prima l'intero disco in un'immagine con GNU ddrescue e poi estrae il titolo dall'immagine con MakeMKV, invece di leggere direttamente il lettore. Nella pagina web si attiva con il selettore «Disco rovinato» nella sezione Lettore DVD; nell'app desktop con la casella «Recupero disco rovinato» accanto a Estrai il film. La scelta resta attiva finché non la si cambia.
+
+Come funziona e perché insiste:
+
+- ddrescue copia il disco in più fasi: prima i settori sani, poi ritaglia i bordi danneggiati, poi scava le aree difficili, poi fa fino a tre giri extra (anche in direzione inversa). Ogni fase riparte dalla mappa di avanzamento (`recupero.map` nella cartella del film): un recupero interrotto o ripetuto riprende da dove era arrivato, senza ricominciare.
+- La percentuale mostrata durante il recupero è reale, letta dalla mappa, non una stima.
+- Se MakeMKV non riesce a estrarre il titolo dall'immagine, viene fatto un altro giro di ddrescue sulle aree rimaste e un nuovo tentativo, fino a tre tentativi complessivi.
+- A fine recupero l'immagine ISO viene eliminata; restano la mappa e `recupero.log` come prova di dove sono i buchi. La scheda del film segnala i GiB irrecuperabili.
+
+Limiti dichiarati con onestà: dove lo strato riflettente è distrutto i dati sono persi fisicamente e nessun software li recupera; l'MKV può avere difetti video nei punti corrispondenti alle aree irrecuperabili. Il trucco multi-drive resta manuale: stesso disco e stessa mappa riprovati su un lettore diverso integrano solo i buchi. La modalità richiede 21 GiB liberi (immagine + pipeline) e non è ancora validata su un DVD rovinato reale: è il primo test da fare dopo l'aggiornamento.
 
 ## Spazio ed errori
 

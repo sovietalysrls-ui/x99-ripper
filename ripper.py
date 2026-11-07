@@ -17,6 +17,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import recover
+
 ROOT = Path(os.environ.get('X99_RIPPER_OUTPUT_DIR', '/mnt/x99/DVD_RIPPATI')).expanduser()
 DEVICE = os.environ.get('X99_RIPPER_DEVICE', '/dev/sr0')
 STATE = Path.home() / '.local/state/x99-ripper'
@@ -417,6 +419,8 @@ class App:
         self.name_var=tk.StringVar()
         ttk.Entry(disc_actions,textvariable=self.name_var,width=35).pack(side='left',padx=(8,12))
         ttk.Button(disc_actions,text='Estrai il film',style='Primary.TButton',command=self.extract).pack(side='left')
+        self.recovery_var=tk.BooleanVar(value=False)
+        ttk.Checkbutton(disc_actions,text='Recupero disco rovinato',variable=self.recovery_var).pack(side='left',padx=(10,0))
 
         jobs=ttk.Frame(outer,style='Card.TFrame',padding=12);jobs.pack(fill='x',pady=(0,10))
         self.jobs_card=jobs
@@ -503,13 +507,25 @@ class App:
         encoding=next((j for j in self.jobs if j['status']=='compressione'),None)
         analyzing=next((j for j in self.jobs if j['status']=='analisi'),None)
         queued=next((j for j in self.jobs if j['status']=='in coda'),None)
+        rescuing=next((j for j in self.jobs if j['status']=='recupero'),None)
         failed=next((j for j in reversed(self.jobs) if j['status'] in {'errore','interrotto'}),None)
-        can_retry=bool(failed and not (extracting or encoding or self.scan_busy or analyzing or queued)
+        can_retry=bool(failed and not (extracting or encoding or rescuing or self.scan_busy or analyzing or queued)
             and failed.get('source') and Path(failed['source']).is_file())
         if can_retry:
             if not self.retry_action.winfo_manager():self.retry_action.pack(anchor='w',pady=(10,0))
         else:self.retry_action.pack_forget()
-        if extracting:
+        if rescuing:
+            rescue=rescuing.get('rescue') or {}
+            percent=float(rescue.get('percent') or 0)
+            self.activity_var.set('Recupero in corso · '+rescuing['name'])
+            detail=(rescue.get('phase') or 'copia del disco')+' · '+f'{percent:.1f}% letto'
+            if rescue.get('bad_gib'):detail+=f" · irrecuperabili {rescue['bad_gib']:.2f} GiB"
+            if rescue.get('remaining_gib'):detail+=f" · da recuperare {rescue['remaining_gib']:.2f} GiB"
+            detail+=' · tempo '+self.elapsed(rescuing.get('started_at'))
+            self.activity_detail.set(detail)
+            self.set_progress(percent)
+            self.warning_var.set(self.read_warning)
+        elif extracting:
             folder=Path(extracting['folder'])
             files=list(folder.glob('*.mkv'))
             size=max((p.stat().st_size for p in files),default=0)
@@ -637,6 +653,7 @@ class App:
 
     def extract(self):
         if self.extract_busy or self.scan_busy:return
+        if self.recovery_var.get():self.extract_recovery();return
         sel=self.titles.selection()
         if not sel:messagebox.showerror('Titolo','Selezionare un titolo.');return
         title_id=int(sel[0]); title=next(x for x in self.disc_titles if x['id']==title_id)
@@ -681,6 +698,77 @@ class App:
                 files=[p for p in folder.glob('*.mkv') if 'interrotto-' not in p.name.lower()]
                 if len(files)!=1:raise RuntimeError(f'Atteso 1 MKV, trovati {len(files)}. Controllare la cartella.')
                 source=files[0]; probe(source)
+                self.events.put(('extracted',(j['id'],str(source))))
+                p=subprocess.run(['eject',DEVICE],capture_output=True,text=True,timeout=30)
+                self.events.put(('eject',(p.returncode,p.stderr.strip())))
+                self.scan_crop_async(j['id'],source)
+            except Exception as e:self.events.put(('job_error',(j['id'],str(e))))
+            finally:self.events.put(('extract_done',None))
+        threading.Thread(target=work,daemon=True).start()
+
+    def extract_recovery(self):
+        if self.extract_busy or self.scan_busy:return
+        if not recover.available():
+            messagebox.showerror('Recupero','Manca GNU ddrescue. Installa il pacchetto gddrescue (sudo apt install gddrescue) e riprova.');return
+        try:
+            if shutil.disk_usage(ROOT).free < 21*2**30:
+                raise ValueError('Spazio insufficiente: il recupero richiede 21 GiB liberi (immagine + pipeline).')
+        except Exception as e:messagebox.showerror('Spazio',str(e));return
+        label=''
+        try:
+            p=subprocess.run(['makemkvcon','-r','info','dev:'+DEVICE],capture_output=True,text=True,timeout=180)
+            label=disc_label(p.stdout+p.stderr)
+        except Exception:label=''
+        name=safe_name(self.name_var.get().strip() or label or f'Recupero_{time.strftime("%Y%m%d_%H%M")}')
+        folder=ROOT/name
+        if folder.exists():
+            messagebox.showerror('Nome già esistente','La cartella esiste già. Scegliere un nome diverso.');return
+        folder.mkdir(parents=True)
+        j={'id':uuid.uuid4().hex,'name':name,'status':'recupero','source':'','output':'','folder':str(folder),
+           'title_id':None,'disc_type':'dvd','expected_bytes':0,'started_at':time.time(),'error':''}
+        self.jobs.append(j); self.save();self.refresh_jobs();self.extract_busy=True
+        self.read_warning=''
+        self.status.set('Recupero avviato: copia del disco rovinato con ddrescue.')
+        def work():
+            iso=folder/(name+'.iso');mapfile=folder/'recupero.map';rescue_log=folder/'recupero.log';logpath=folder/'estrazione.log'
+            try:
+                def progress(stats):
+                    remaining=stats['total']-stats['finished']-stats['bad']
+                    self.events.put(('rescue',(j['id'],{'phase':stats['phase'],'percent':stats['percent'],
+                        'bad_gib':round(stats['bad']/2**30,2),'remaining_gib':round(remaining/2**30,2)})))
+                recover.rescue_iso(DEVICE,iso,mapfile,rescue_log,progress)
+                stats=recover.map_stats(mapfile)
+                if not stats['finished']:raise RuntimeError('Nessun dato leggibile dal disco. Consultare recupero.log.')
+                source=None
+                for attempt in range(1,4):
+                    self.events.put(('stage',(j['id'],'estrazione')))
+                    self.events.put(('progress',f"Estrazione dall'immagine · tentativo {attempt}/3"))
+                    p=subprocess.run(['makemkvcon','-r','info',recover.iso_source(iso)],capture_output=True,text=True,timeout=3600)
+                    titles=titles_from_robot(p.stdout+p.stderr)
+                    title=max(titles,key=self.seconds) if titles else None
+                    rc=1
+                    if title:
+                        j['title_id']=title['id'];j['duration']=title['duration'];j['expected_bytes']=int(title['size'] or 0);self.save()
+                        with self.drive_lock:
+                            rc=self.run_logged(['makemkvcon','-r','mkv',recover.iso_source(iso),str(title['id']),str(folder)],logpath)
+                    files=[p2 for p2 in folder.glob('*.mkv') if 'interrotto-' not in p2.name.lower()]
+                    if rc==0 and len(files)==1:
+                        source=files[0];break
+                    for stale in files:stale.unlink(missing_ok=True)
+                    if attempt==3:break
+                    self.events.put(('warning',f"Tentativo {attempt}/3 di estrazione dall'immagine fallito; riprovo con un altro giro di ddrescue."))
+                    stats=recover.map_stats(mapfile)
+                    remaining=stats['nontried']+stats['nontrimmed']+stats['nonscraped']+stats['bad']
+                    if remaining:
+                        self.events.put(('stage',(j['id'],'recupero')))
+                        recover.rescue_iso(DEVICE,iso,mapfile,rescue_log,progress)
+                    else:break
+                if not source:
+                    raise RuntimeError("Impossibile estrarre il titolo dall'immagine. "
+                                       +recover.summary(recover.map_stats(mapfile))
+                                       +' Consultare estrazione.log e recupero.map.')
+                probe(source)
+                iso.unlink(missing_ok=True)
                 self.events.put(('extracted',(j['id'],str(source))))
                 p=subprocess.run(['eject',DEVICE],capture_output=True,text=True,timeout=30)
                 self.events.put(('eject',(p.returncode,p.stderr.strip())))
@@ -885,7 +973,7 @@ class App:
         current=self.selected_job
         for x in self.job_list.get_children():self.job_list.delete(x)
         self.job_list.configure(height=max(1,min(3,len(self.jobs))))
-        labels={'estrazione':'Estrazione','analisi':'Analisi video','da confermare':'Pronto','in coda':'In coda','compressione':'Compressione','verificato':'Completato','errore':'Errore','interrotto':'Interrotto'}
+        labels={'recupero':'Recupero','estrazione':'Estrazione','analisi':'Analisi video','da confermare':'Pronto','in coda':'In coda','compressione':'Compressione','verificato':'Completato','errore':'Errore','interrotto':'Interrotto'}
         for j in self.jobs:
             source=Path(j['source']).name if j.get('source') else '—'
             output=Path(j['output']).name if j.get('output') else '—'
@@ -931,9 +1019,14 @@ class App:
                         self.disk_status.set('MakeMKV non ha aperto il Blu-ray: verifica la chiave nella pagina ufficiale.')
                     elif self.drive_bluray_capable is False:
                         self.disk_status.set('Nessun titolo leggibile. Se hai inserito un Blu-ray, questo lettore legge solo DVD: serve un lettore Blu-ray.')
-                    else:self.disk_status.set('Nessun titolo leggibile. Controllare disco/unità. '+tail[-250:])
+                    else:self.disk_status.set('Nessun titolo leggibile. Controllare disco/unità; se il disco è rovinato, spunta «Recupero disco rovinato» e premi Estrai il film. '+tail[-250:])
                     self.append(tail)
                 elif typ=='scan_error':self.scan_busy=False;self.disk_status.set('Scansione fallita: '+data)
+                elif typ=='rescue':
+                    jid,rescue=data;j=self.by_id(jid);j['rescue']=rescue;self.save()
+                    self.status.set(f"Recupero: {rescue['percent']:.1f}% · {rescue['phase']} · da recuperare {rescue['remaining_gib']:.2f} GiB")
+                elif typ=='stage':
+                    jid,status=data;j=self.by_id(jid);j['status']=status;self.save();self.refresh_jobs()
                 elif typ=='extracted':
                     jid,path=data;j=self.by_id(jid);j['source']=path;j['status']='analisi';self.save();self.refresh_jobs();self.status.set('Estratto. Scansione crop in corso.')
                     if j.get('disc_type')=='blu-ray':

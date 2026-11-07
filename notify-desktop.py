@@ -13,6 +13,7 @@ JOBS = STATE / 'jobs.json'
 SENT = STATE / 'desktop-notified.json'
 CONFIG = Path.home() / '.config/x99-ripper/config'
 MESSAGES = {
+    'recupero': '{name}: recupero del disco rovinato avviato con ddrescue.',
     'in coda': '{name}: estrazione completata, in attesa di compressione.',
     'da confermare': '{name}: serve confermare il ritaglio prima della compressione.',
     'verificato': '{name}: compressione completata e file verificato.',
