@@ -287,6 +287,8 @@ class Manager:
                 if job['status'] in ('compressione', 'estrazione'):
                     job['status']='errore'
                     job['error']='Lavoro interrotto; controlla il file sorgente e usa Riprova errori.'
+                elif job['status'] == 'pronto' and job.get('catalog_metadata'):
+                    job['auto_encode'] = True
         except (OSError, ValueError):
             pass
         self.busy = False
@@ -396,6 +398,10 @@ class Manager:
                     self.mirror_desktop()
                 elif not media and self.state['phase'] in ('Desktop attivo','Estrazione desktop','Compressione desktop','Analisi desktop'):
                     self.set('Pronto', 'Inserisci un DVD.',0,job=None)
+                if not desktop and not self.encoding and any(
+                        job['status'] == 'pronto' and job.get('auto_encode')
+                        for job in self.state['queue']):
+                    self.start_encoding(auto_only=True)
                 self.last_media = media
             except Exception as e:
                 self.set(log='Controllo disco: ' + str(e))
@@ -473,13 +479,14 @@ class Manager:
         finally:
             with self.lock: self.busy = False
 
-    def start_encoding(self):
+    def start_encoding(self, auto_only=False):
         with self.lock:
             if (self.encoding or self.desktop_active() or
-                    not any(j['status']=='pronto' for j in self.state['queue'])):
+                    not any(j['status']=='pronto' and (not auto_only or j.get('auto_encode'))
+                            for j in self.state['queue'])):
                 return False
             self.encoding = True
-        threading.Thread(target=self.encode_queue,daemon=True).start()
+        threading.Thread(target=self.encode_queue,args=(auto_only,),daemon=True).start()
         return True
 
     def set_limit(self,limit):
@@ -515,6 +522,7 @@ class Manager:
             job['catalog_title'] = title
             job['catalog_year'] = year or None
             job.pop('catalog_metadata', None)
+            job.pop('auto_encode', None)
             self.set(queue=self.state['queue'])
         return True
 
@@ -530,7 +538,9 @@ class Manager:
             job['catalog_year'] = metadata['year']
             job['catalog_metadata'] = metadata
             job['original_language'] = metadata.get('original_language', '')
+            job['auto_encode'] = True
             self.set(queue=self.state['queue'])
+        self.start_encoding(auto_only=True)
         return True
 
     def delete_ready(self, index, confirm_name):
@@ -574,23 +584,25 @@ class Manager:
             if changed:self.set('In attesa','I film con errore sono pronti per un nuovo tentativo.',0,queue=self.state['queue'])
             return changed
 
-    def next_ready_or_wait(self):
+    def next_ready_or_wait(self, auto_only=False):
         """Keep the encoder queue alive until an in-progress extraction joins it."""
         while True:
             with self.lock:
-                job = next((j for j in self.state['queue'] if j['status'] == 'pronto'), None)
-                if job or not self.busy:
+                job = next((j for j in self.state['queue'] if j['status'] == 'pronto' and
+                            (not auto_only or j.get('auto_encode'))), None)
+                if job or auto_only or not self.busy:
                     return job
             time.sleep(0.25)
 
-    def encode_queue(self):
+    def encode_queue(self, auto_only=False):
         try:
             while True:
-                job = self.next_ready_or_wait()
+                job = self.next_ready_or_wait(auto_only)
                 if not job:
                     break
                 with self.lock:
                     job['status']='compressione'
+                    job.pop('auto_encode', None)
                     self.set('Analisi', 'Preparo '+job['name']+'…',0,job=job)
                 try:
                     source=Path(job['source']);folder=Path(job['folder']);name=job['name']
@@ -644,8 +656,10 @@ class Manager:
             with self.lock:
                 done=sum(j['status']=='completato' for j in self.state['queue'])
                 errors=sum(j['status']=='errore' for j in self.state['queue'])
-            self.set('Coda terminata',f'{done} completati · {errors} da controllare.',100,job=None)
-            notify(f'X99 Ripper: coda terminata. {done} completati, {errors} errori.')
+                ready=sum(j['status']=='pronto' for j in self.state['queue'])
+            phase = 'In attesa' if ready else 'Coda terminata'
+            self.set(phase,f'{done} completati · {ready} in attesa · {errors} da controllare.',100,job=None)
+            notify(f'X99 Ripper: {done} completati, {ready} in attesa, {errors} errori.')
         finally:
             with self.lock:self.encoding=False
 

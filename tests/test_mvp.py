@@ -166,12 +166,28 @@ class QueueTests(unittest.TestCase):
         metadata = {'title': 'La casa dalle finestre che ridono', 'year': 1976,
                     'wikidata_id': 'Q2602481', 'original_language': 'ita',
                     'director': ['Pupi Avati']}
-        with mock.patch.object(film_library, 'details', return_value=metadata):
+        with mock.patch.object(film_library, 'details', return_value=metadata), \
+                mock.patch.object(manager, 'start_encoding', return_value=True) as start:
             self.assertTrue(manager.set_catalog_choice(0, 'Q2602481'))
+        start.assert_called_once_with(auto_only=True)
         job = manager.state['queue'][0]
         self.assertEqual(job['catalog_title'], metadata['title'])
         self.assertEqual(job['catalog_metadata']['director'], ['Pupi Avati'])
         self.assertEqual(job['original_language'], 'ita')
+        self.assertTrue(job['auto_encode'])
+
+    def test_automatic_encoding_selects_only_confirmed_film(self):
+        manager = self.manager()
+        manager.state['queue'] = [
+            {'name': 'DVDVolume', 'status': 'pronto', 'auto_encode': True},
+            {'name': 'DVDVolume_duplicato', 'status': 'pronto'}]
+        self.assertEqual(manager.next_ready_or_wait(auto_only=True)['name'], 'DVDVolume')
+        manager.state['queue'][0]['status'] = 'compressione'
+        self.assertIsNone(manager.next_ready_or_wait(auto_only=True))
+        with mock.patch.object(web.threading, 'Thread') as thread:
+            self.assertFalse(manager.start_encoding(auto_only=True))
+            self.assertTrue(manager.start_encoding())
+        thread.return_value.start.assert_called_once()
 
     def test_delete_pending_job_requires_matching_name_and_preserves_other_folders(self):
         manager = self.manager()

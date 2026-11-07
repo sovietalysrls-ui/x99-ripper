@@ -51,7 +51,7 @@ L'MKV acquisito e gli eventuali tentativi parziali restano nella cartella del fi
 
 ## Versione e ripristino
 
-La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.15.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
+La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.15.1`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
 
 DiscFlow usa MakeMKV e HandBrake già installati. Non include chiavi né funzioni per aggirare protezioni DRM.
 
@@ -65,4 +65,4 @@ Apri **Trova titolo** nel catalogo. Scrivi anche poche parole (per esempio `case
 
 ### Cerca o elimina un DVD prima della compressione
 
-Nella pagina dei lavori in attesa, scrivi un indizio nel campo del DVD e premi **Cerca**. Scegli il film corretto e premi **Conferma film**; il titolo italiano e i metadati saranno applicati al file finale. Se un DVD è stato acquisito due volte, premi **Elimina** sulla riga da rimuovere e leggi il nome e la cartella nella conferma: questa azione cancella i file di quella cartella e non si può annullare. Non usare **Salva solo titolo** per una proposta di ricerca non verificata.
+Nella pagina dei lavori in attesa, scrivi un indizio nel campo del DVD e premi **Cerca**. Scegli il film corretto e premi **Conferma film**; parte la compressione di quel DVD; il titolo italiano e i metadati saranno applicati al file finale. Le altre copie restano in attesa. Se un DVD è stato acquisito due volte, premi **Elimina** sulla riga da rimuovere e leggi il nome e la cartella nella conferma: questa azione cancella i file di quella cartella e non si può annullare. Non usare **Salva solo titolo** per una proposta di ricerca non verificata.
