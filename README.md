@@ -1,4 +1,10 @@
-# DiscFlow 0.21.1 · coda DVD, catalogo e app Android
+# DiscFlow 0.21.2 · coda DVD, catalogo e app Android
+
+## Modalità del prossimo DVD (v0.21.2)
+
+La scelta tra estrazione normale e recupero con ddrescue ora vale per il prossimo
+DVD e resta modificabile mentre HandBrake comprime o ddrescue lavora sul disco
+attuale. Il cambio non interrompe il lavoro già avviato.
 
 ## Caricamento locale dall’X99 (v0.21.1)
 

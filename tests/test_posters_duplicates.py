@@ -12,6 +12,19 @@ import web
 
 
 class PosterAndDuplicateTests(unittest.TestCase):
+    def test_next_disc_mode_can_change_during_encoding_or_recovery(self):
+        manager = object.__new__(web.Manager)
+        manager.lock = threading.RLock()
+        manager.state = {'recovery_mode': True}
+        manager.busy = True
+        manager.encoding = True
+        manager.set = lambda **values: manager.state.update(values)
+        manager.desktop_active = lambda: False
+        self.assertTrue(manager.set_recovery(False))
+        self.assertFalse(manager.state['recovery_mode'])
+        manager.desktop_active = lambda: True
+        self.assertFalse(manager.set_recovery(True))
+
     def test_only_configured_lan_client_can_open_dashboard(self):
         handler = object.__new__(web.Handler)
         handler.send_error = lambda code: setattr(handler, 'denied', code)

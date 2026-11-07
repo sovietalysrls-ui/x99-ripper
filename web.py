@@ -923,7 +923,9 @@ class Manager:
         if value not in (True, False):
             return False
         with self.lock:
-            if self.busy or self.encoding or self.desktop_active():
+            # The running worker already chose its workflow at start. This
+            # setting applies only when the next disc starts scanning.
+            if self.desktop_active():
                 return False
             self.set(recovery_mode=value)
         return True
