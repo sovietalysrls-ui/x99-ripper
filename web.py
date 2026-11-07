@@ -139,7 +139,7 @@ def completed_files():
 def measure_storage(root, preview_dir):
     """Account for DiscFlow files on the media filesystem without double counting."""
     device = root.stat().st_dev
-    totals = {'sources': 0, 'work': 0, 'final': 0}
+    totals = {'sources': 0, 'work': 0, 'final': 0, 'iso': 0}
     seen = set()
     def add(path, kind):
         try:
@@ -152,6 +152,8 @@ def measure_storage(root, preview_dir):
         except OSError:
             pass
     for path in root.rglob('*'):
+        if path.suffix.lower() == '.iso':
+            add(path, 'iso'); continue
         if path.suffix.lower() != '.mkv': continue
         name = path.name.lower()
         if name.endswith('_h265.mkv'):
