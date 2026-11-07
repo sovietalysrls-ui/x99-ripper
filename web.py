@@ -14,6 +14,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import recover
 import ripper as core
 
 BASE = '/ripper'
@@ -88,6 +89,12 @@ def desktop_jobs():
                     item['percent'] = round(min(99, size / expected * 100), 1)
             except (OSError, ValueError):
                 pass
+        elif status == 'recupero':
+            st = job.get('rescue') or {}
+            item['percent'] = st.get('percent')
+            item['written_gib'] = round((st.get('finished') or 0) / 2**30, 2)
+            item['expected_gib'] = round((st.get('total') or 0) / 2**30, 2)
+            item['recovery_bad_gib'] = round((st.get('bad') or 0) / 2**30, 3)
         result.append(item)
     return result
 
@@ -96,7 +103,8 @@ class Manager:
     def __init__(self):
         self.lock = threading.RLock()
         self.state = {'phase': 'Pronto', 'detail': 'Inserisci un DVD.', 'percent': 0,
-                      'job': None, 'log': [], 'queue': [], 'max_discs': 10}
+                      'job': None, 'log': [], 'queue': [], 'max_discs': 10,
+                      'recovery_mode': False}
         try:
             old = json.loads(STATE.read_text())
             if old.get('phase') not in ('Pronto', 'In attesa', 'Coda terminata', 'Errore'):
@@ -167,11 +175,16 @@ class Manager:
             active = next((j for j in jobs if j['status'] == 'estrazione'),None)
             encoding = next((j for j in jobs if j['status'] == 'compressione'),None)
             active = active or encoding or next((j for j in jobs if j['status'] == 'analisi'),None)
+            active = active or next((j for j in jobs if j['status'] == 'recupero'),None)
             if not active:
                 self.set('Desktop attivo', 'Il programma desktop è aperto. Chiudilo per usare il controllo web.')
                 return
             name = active['name']
-            if active['status'] == 'estrazione':
+            if active['status'] == 'recupero':
+                st = active.get('rescue') or {}
+                percent = st.get('percent') or 0
+                self.set('Recupero desktop', name+' · '+f'{percent:.1f}%',percent,job={'name':name})
+            elif active['status'] == 'estrazione':
                 folder = Path(active['folder'])
                 size = max((p.stat().st_size for p in folder.glob('*.mkv')),default=0)
                 expected = int(active.get('expected_bytes') or 0)
@@ -227,51 +240,132 @@ class Manager:
 
     def workflow(self):
         try:
-            self.set('Rilevamento', 'Cerco il titolo principale…', 0)
-            p = subprocess.run(['makemkvcon', '-r', 'info', 'dev:' + core.DEVICE],
-                               capture_output=True, text=True, timeout=240)
-            text = p.stdout + p.stderr
-            titles = core.titles_from_robot(text)
-            if not titles:
-                raise RuntimeError('Nessun titolo DVD trovato. Controlla il disco o il log di MakeMKV.')
-            def seconds(t):
-                try:
-                    h, m, s = map(int, t['duration'].split(':')); return h*3600+m*60+s
-                except ValueError: return 0
-            title = max(titles, key=seconds)
-            self.set(detected_titles=[{'id':t['id'], 'name':t['name'],
-                                        'duration':t['duration'],
-                                        'size_gib':round(int(t['size'] or 0)/2**30,1)}
-                                       for t in sorted(titles,key=seconds,reverse=True)],
-                     selected_title_id=title['id'])
-            name = core.safe_name(core.disc_label(text) or title['name'] or 'Film_' + time.strftime('%Y%m%d_%H%M'))
-            folder = core.ROOT / name
-            if folder.exists():
-                name += '_' + time.strftime('%Y%m%d_%H%M%S'); folder = core.ROOT / name
-            expected = int(title['size'] or 0)
-            if shutil.disk_usage(core.ROOT).free < max(expected+8*2**30, 12*2**30):
-                raise RuntimeError('Spazio insufficiente per estrazione e compressione.')
-            folder.mkdir(parents=True)
-            self.set('Estrazione', 'Estraggo ' + name + '…', 0, job={'name': name, 'folder': str(folder), 'title_id': title['id'], 'expected_bytes':expected})
-            rc = self.run(['makemkvcon','-r','mkv','dev:'+core.DEVICE,str(title['id']),str(folder)], folder/'estrazione.log')
-            if rc: raise RuntimeError('MakeMKV si è fermato. Controlla estrazione.log; i file restano conservati.')
-            files = sorted(folder.glob('*.mkv'), key=lambda p:p.stat().st_size, reverse=True)
-            if not files: raise RuntimeError('Nessun MKV estratto.')
-            source = files[0]
-            subprocess.run(['eject',core.DEVICE], capture_output=True, timeout=30)
-            queued = {'name':name,'folder':str(folder),'source':str(source),
-                      'title_id':title['id'],'duration':title['duration'],
-                      'status':'pronto'}
-            with self.lock:
-                jobs = self.state['queue'] + [queued]
-            self.set('In attesa', name+' estratto. Inserisci il prossimo DVD oppure avvia la compressione.',
-                     0,job=None,queue=jobs)
-            notify('X99 Ripper: '+name+' estratto; '+str(sum(j['status']=='pronto' for j in jobs))+' film in attesa.')
+            if self.state.get('recovery_mode'):
+                self.workflow_recovery()
+            else:
+                self.workflow_disc()
         except Exception as e:
             self.set('Errore', str(e), log=str(e))
-            notify('X99 Ripper: serve attenzione. '+str(e))
+            notify('X99 Ripper: serve attenzione. ' + str(e))
         finally:
             with self.lock: self.busy = False
+
+    def workflow_disc(self):
+        self.set('Rilevamento', 'Cerco il titolo principale…', 0)
+        p = subprocess.run(['makemkvcon', '-r', 'info', 'dev:' + core.DEVICE],
+                           capture_output=True, text=True, timeout=240)
+        text = p.stdout + p.stderr
+        titles = core.titles_from_robot(text)
+        if not titles:
+            raise RuntimeError('Nessun titolo DVD trovato. Controlla il disco o il log di MakeMKV.')
+        def seconds(t):
+            try:
+                h, m, s = map(int, t['duration'].split(':')); return h*3600+m*60+s
+            except ValueError: return 0
+        title = max(titles, key=seconds)
+        self.set(detected_titles=[{'id':t['id'], 'name':t['name'],
+                                    'duration':t['duration'],
+                                    'size_gib':round(int(t['size'] or 0)/2**30,1)}
+                                   for t in sorted(titles,key=seconds,reverse=True)],
+                 selected_title_id=title['id'])
+        name = core.safe_name(core.disc_label(text) or title['name'] or 'Film_' + time.strftime('%Y%m%d_%H%M'))
+        folder = core.ROOT / name
+        if folder.exists():
+            name += '_' + time.strftime('%Y%m%d_%H%M%S'); folder = core.ROOT / name
+        expected = int(title['size'] or 0)
+        if shutil.disk_usage(core.ROOT).free < max(expected+8*2**30, 12*2**30):
+            raise RuntimeError('Spazio insufficiente per estrazione e compressione.')
+        folder.mkdir(parents=True)
+        self.set('Estrazione', 'Estraggo ' + name + '…', 0, job={'name': name, 'folder': str(folder), 'title_id': title['id'], 'expected_bytes':expected})
+        rc = self.run(['makemkvcon','-r','mkv','dev:'+core.DEVICE,str(title['id']),str(folder)], folder/'estrazione.log')
+        if rc: raise RuntimeError('MakeMKV si è fermato. Controlla estrazione.log; i file restano conservati.')
+        files = sorted(folder.glob('*.mkv'), key=lambda p:p.stat().st_size, reverse=True)
+        if not files: raise RuntimeError('Nessun MKV estratto.')
+        source = files[0]
+        subprocess.run(['eject',core.DEVICE], capture_output=True, timeout=30)
+        queued = {'name':name,'folder':str(folder),'source':str(source),
+                  'title_id':title['id'],'duration':title['duration'],
+                  'status':'pronto'}
+        with self.lock:
+            jobs = self.state['queue'] + [queued]
+        self.set('In attesa', name+' estratto. Inserisci il prossimo DVD oppure avvia la compressione.',
+                 0,job=None,queue=jobs)
+        notify('X99 Ripper: '+name+' estratto; '+str(sum(j['status']=='pronto' for j in jobs))+' film in attesa.')
+
+    def workflow_recovery(self):
+        self.set('Recupero', 'Preparo il recupero del disco rovinato…', 0)
+        if not recover.available():
+            raise RuntimeError('ddrescue non è installato: eseguire "sudo apt install gddrescue".')
+        label = ''
+        try:
+            p = subprocess.run(['makemkvcon', '-r', 'info', 'dev:' + core.DEVICE],
+                               capture_output=True, text=True, timeout=240)
+            label = core.disc_label(p.stdout)
+        except Exception:
+            pass
+        name = core.safe_name(label or 'Recupero_' + time.strftime('%Y%m%d_%H%M'))
+        folder = core.ROOT / name
+        if folder.exists():
+            name += '_' + time.strftime('%Y%m%d_%H%M%S'); folder = core.ROOT / name
+        if shutil.disk_usage(core.ROOT).free < 21 * 2**30:
+            raise RuntimeError('Spazio insufficiente per immagine di recupero ed estrazione (servono 21 GiB liberi).')
+        folder.mkdir(parents=True)
+        iso = folder / (name + '.iso'); mapfile = folder / 'recupero.map'
+        def progress(stats):
+            self.set(percent=stats.get('percent') or 0,
+                     detail='Recupero ' + name + ' · ' + f"{stats.get('percent', 0):.1f}% letto · fase {stats.get('phase', '')}",
+                     recovery={'percent': stats.get('percent'),
+                               'phase': stats.get('phase'),
+                               'bad_gib': round(stats.get('bad', 0) / 2**30, 3),
+                               'finished_gib': round(stats.get('finished', 0) / 2**30, 2),
+                               'total_gib': round(stats.get('total', 0) / 2**30, 2)})
+        stats = recover.rescue_iso(core.DEVICE, iso, mapfile, folder / 'recupero.log', progress)
+        p = subprocess.run(['makemkvcon', '-r', 'info', recover.iso_source(iso)],
+                           capture_output=True, text=True, timeout=300)
+        titles = core.titles_from_robot(p.stdout)
+        if not titles:
+            raise RuntimeError('Nessun titolo leggibile nemmeno dall’immagine di recupero. ' + recover.summary(stats))
+        def seconds(t):
+            try:
+                h, m, sec = map(int, t['duration'].split(':')); return h*3600 + m*60 + sec
+            except ValueError: return 0
+        title = max(titles, key=seconds)
+        attempt = 0
+        source = None
+        while True:
+            rc = self.run(['makemkvcon', '-r', 'mkv', recover.iso_source(iso), str(title['id']), str(folder)],
+                          folder / 'estrazione.log')
+            files = sorted(folder.glob('*.mkv'), key=lambda f: f.stat().st_size, reverse=True)
+            if rc == 0 and files:
+                source = files[0]; break
+            attempt += 1
+            if attempt > 2:
+                raise RuntimeError('Estrazione dal disco rovinato fallita più volte. '
+                    + recover.summary(stats) + ' Log in estrazione.log e recupero.log.')
+            for stale in files: stale.unlink()
+            self.set('Recupero', name + ': estrazione parziale, altro giro di ddrescue…',
+                     log=name + ': estrazione parziale; riprovo dopo un altro giro di recupero.')
+            stats = recover.rescue_iso(core.DEVICE, iso, mapfile, folder / 'recupero.log', progress)
+        try: iso.unlink()
+        except OSError: pass
+        subprocess.run(['eject', core.DEVICE], capture_output=True, timeout=30)
+        queued = {'name': name, 'folder': str(folder), 'source': str(source),
+                  'title_id': title['id'], 'duration': title['duration'],
+                  'status': 'pronto', 'recovery_bad_gib': round(stats.get('bad', 0) / 2**30, 3)}
+        with self.lock:
+            jobs = self.state['queue'] + [queued]
+        self.set('In attesa', name + ' recuperato dal disco rovinato (' + recover.summary(stats)
+                 + '). Inserisci il prossimo DVD oppure avvia la compressione.',
+                 0, job=None, queue=jobs, recovery=None)
+        notify('X99 Ripper: ' + name + ' recuperato dal disco rovinato. ' + recover.summary(stats))
+
+    def toggle_recovery(self):
+        with self.lock:
+            if self.busy or self.encoding:
+                return False
+            self.state['recovery_mode'] = not self.state.get('recovery_mode', False)
+            self.save()
+            return True
 
     def start_encoding(self):
         with self.lock:
@@ -384,6 +478,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == BASE+'/scan':ok=manager.start_scan()
         elif self.path == BASE+'/encode':ok=manager.start_encoding()
         elif self.path == BASE+'/retry':ok=manager.retry_errors()
+        elif self.path == BASE+'/recovery':ok=manager.toggle_recovery()
         elif self.path in (BASE+'/limit/5',BASE+'/limit/10'):
             ok=manager.set_limit(int(self.path.rsplit('/',1)[1]))
         else:

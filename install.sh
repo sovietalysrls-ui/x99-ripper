@@ -14,6 +14,7 @@ if test -n "${X99_RIPPER_OUTPUT_DIR:-}"; then
   chmod 600 "$config_dir/config"
 fi
 install -m 644 "$script_dir/ripper.py" "$install_dir/ripper.py"
+install -m 644 "$script_dir/recover.py" "$install_dir/recover.py"
 install -m 644 "$script_dir/monitor.py" "$install_dir/monitor.py"
 install -m 755 "$script_dir/run.sh" "$install_dir/run.sh"
 cat > "$launcher" <<EOF
