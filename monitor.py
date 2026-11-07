@@ -65,15 +65,22 @@ class Monitor:
         else:
             name=job.get('name','Film');stage=job.get('status','')
             folder=Path(job.get('folder','/nonexistent'))
-            if stage in {'estrazione','compressione'}:
+            if stage in {'estrazione','compressione','recupero'}:
                 self.missing_count=0 if process_active(stage) else self.missing_count+1
             else:self.missing_count=0
-            if stage in {'estrazione','compressione'} and self.missing_count>=3:
+            if stage in {'estrazione','compressione','recupero'} and self.missing_count>=3:
                 percent=last_percent(folder/'compressione.log') if stage=='compressione' else None
                 self.title.set('Lavorazione interrotta · '+name)
                 self.detail.set(f'HandBrake non è più attivo. Ultimo avanzamento: {percent:.2f}%.' if percent is not None else 'Il processo non è più attivo.')
                 self.bar.stop();self.bar.configure(mode='determinate',value=percent or 0);self.mode='determinate'
                 self.note.set('L’MKV originale è salvo. Apri X99 Ripper aggiornato e premi Riprova compressione.')
+            elif stage=='recupero':
+                rescue=job.get('rescue') or {}
+                percent=float(rescue.get('percent') or 0)
+                self.title.set('Recupero in corso · '+name)
+                self.detail.set((rescue.get('phase') or 'copia del disco')+f' · {percent:.1f}% letto')
+                self.bar.stop();self.bar.configure(mode='determinate',value=percent);self.mode='determinate'
+                self.note.set('La mappa di recupero è conservata: un recupero interrotto riprende da dove era arrivato.')
             elif stage=='estrazione':
                 files=list(folder.glob('*.mkv'))
                 size=max((p.stat().st_size for p in files),default=0)

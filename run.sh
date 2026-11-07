@@ -17,6 +17,9 @@ if ! command -v HandBrakeCLI >/dev/null 2>&1; then
     exit 1
   fi
 fi
+if ! command -v ddrescue >/dev/null 2>&1; then
+  printf 'Avviso: manca ddrescue; installa gddrescue per usare la modalità recupero dischi rovinati.\n' >&2
+fi
 output_dir="${X99_RIPPER_OUTPUT_DIR:-/mnt/x99/DVD_RIPPATI}"
 if ! test -d "$output_dir" || ! test -w "$output_dir"; then
   printf 'La cartella di destinazione %s non esiste o non è scrivibile.\n' "$output_dir" >&2

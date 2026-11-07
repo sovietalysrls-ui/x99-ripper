@@ -4,7 +4,17 @@ script_dir=$(dirname "$(readlink -f "$0")")
 install_dir="$HOME/.local/share/x99-ripper"
 unit_dir="$HOME/.config/systemd/user"
 mkdir -p "$install_dir" "$unit_dir"
+# Se le variabili non sono passate, conserva i valori già presenti nella unit
+# (evita di azzerare host/proxy rilanciando lo script senza argomenti).
+host=${X99_RIPPER_WEB_HOST:-}
+proxy=${X99_RIPPER_ALLOWED_PROXY:-}
+if [ -f "$unit_dir/x99-ripper-web.service" ]; then
+  [ -n "$host" ] || host=$(sed -n 's/^Environment=X99_RIPPER_WEB_HOST=//p' "$unit_dir/x99-ripper-web.service" | tail -1)
+  [ -n "$proxy" ] || proxy=$(sed -n 's/^Environment=X99_RIPPER_ALLOWED_PROXY=//p' "$unit_dir/x99-ripper-web.service" | tail -1)
+fi
+[ -n "$host" ] || host=$(tailscale ip -4)
 install -m 644 "$script_dir/ripper.py" "$install_dir/ripper.py"
+install -m 644 "$script_dir/recover.py" "$install_dir/recover.py"
 install -m 644 "$script_dir/web.py" "$install_dir/web.py"
 install -m 644 "$script_dir/web.html" "$install_dir/web.html"
 install -m 644 "$script_dir/films.html" "$install_dir/films.html"
@@ -23,8 +33,8 @@ cat > "$unit_dir/x99-ripper-web.service" <<EOF
 Description=X99 Ripper browser controller
 After=network-online.target
 [Service]
-Environment=X99_RIPPER_WEB_HOST=${X99_RIPPER_WEB_HOST:-$(tailscale ip -4)}
-Environment=X99_RIPPER_ALLOWED_PROXY=${X99_RIPPER_ALLOWED_PROXY:-}
+Environment=X99_RIPPER_WEB_HOST=$host
+Environment=X99_RIPPER_ALLOWED_PROXY=$proxy
 ExecStart=$install_dir/run-web.sh
 Restart=on-failure
 RestartSec=10
