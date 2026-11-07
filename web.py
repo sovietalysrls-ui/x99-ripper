@@ -37,6 +37,7 @@ COMPLETED_DIR = Path(os.environ.get('X99_RIPPER_COMPLETED_DIR') or core.ROOT).ex
 AUTO_CATALOG_LOCK = threading.Lock()
 STORAGE_LOCK = threading.Lock()
 STORAGE_CACHE = (0, None)
+SOURCE_RETENTION_SECONDS = 48 * 3600
 STREAM_SECRET_FILE = core.STATE / 'stream-secret'
 STREAM_SECRET_LOCK = threading.Lock()
 STREAM_SECRET = None
@@ -116,7 +117,6 @@ def completed_files():
 
 def measure_storage(root, preview_dir):
     """Account for DiscFlow files on the media filesystem without double counting."""
-    usage = shutil.disk_usage(root)
     device = root.stat().st_dev
     totals = {'sources': 0, 'work': 0, 'final': 0}
     seen = set()
@@ -142,9 +142,8 @@ def measure_storage(root, preview_dir):
     if preview_dir.is_dir():
         for path in preview_dir.rglob('*.mp4'):
             add(path, 'work')
-    totals['other'] = max(0, usage.total - usage.free - sum(totals.values()))
-    totals['free'] = usage.free
-    return {'total': usage.total, **totals}
+    totals['free'] = shutil.disk_usage(root).free
+    return totals
 
 
 def storage_breakdown():
@@ -320,6 +319,7 @@ class Manager:
         self.state = {'phase': 'Pronto', 'detail': 'Inserisci un DVD.', 'percent': 0,
                       'job': None, 'log': [], 'queue': [], 'max_discs': 10,
                       'encoder': 'cpu'}
+        migrated = False
         try:
             old = json.loads(STATE.read_text())
             if old.get('phase') not in ('Pronto', 'In attesa', 'Coda terminata', 'Errore'):
@@ -334,11 +334,35 @@ class Manager:
                     job['error']='Lavoro interrotto; controlla il file sorgente e usa Riprova errori.'
                 elif job['status'] == 'pronto' and job.get('catalog_metadata'):
                     job['auto_encode'] = True
+                elif job['status'] == 'completato':
+                    if not job.get('verified_at'):
+                        job['verified_at'] = time.time()
+                        migrated = True
+                    if not job.get('catalog_title'):
+                        output_path = Path(job.get('output') or '')
+                        info = film_library.read(output_path) if output_path.is_file() else {}
+                        if info.get('title'):
+                            job['catalog_title'] = info['title']
+                            job['catalog_year'] = info.get('year')
+                            migrated = True
+                    if not job.get('duration_seconds'):
+                        try:
+                            job['duration_seconds'] = round(float(core.probe(job['output'])['format']['duration']))
+                            migrated = True
+                        except (OSError, ValueError, KeyError, IndexError, RuntimeError):
+                            pass
+                    if not job.get('size_gib'):
+                        path = Path(job.get('source') or '')
+                        if not path.is_file(): path = Path(job.get('output') or '')
+                        if path.is_file():
+                            job['size_gib'] = round(path.stat().st_size / 2**30, 1)
+                            migrated = True
         except (OSError, ValueError):
             pass
         self.busy = False
         self.encoding = False
         self.last_media = False
+        if migrated: self.save()
         threading.Thread(target=self.watch, daemon=True).start()
 
     def save(self):
@@ -447,6 +471,8 @@ class Manager:
                         job['status'] == 'pronto' and job.get('auto_encode')
                         for job in self.state['queue']):
                     self.start_encoding(auto_only=True)
+                if not desktop and not self.busy and not self.encoding:
+                    self.cleanup_due_sources()
                 self.last_media = media
             except Exception as e:
                 self.set(log='Controllo disco: ' + str(e))
@@ -606,6 +632,45 @@ class Manager:
                      queue=queue, job=None)
         return True
 
+    def remove_verified_source(self, index, confirm_name, automatic=False):
+        """Remove one app-acquired source after its verified output is available."""
+        with self.lock:
+            if self.busy or self.encoding or self.desktop_active(): return False
+            if not 0 <= index < len(self.state['queue']): return False
+            job = self.state['queue'][index]
+            if job.get('status') != 'completato' or job.get('name') != confirm_name or 'title_id' not in job:
+                return False
+            if automatic and time.time() - float(job.get('verified_at') or time.time()) < SOURCE_RETENTION_SECONDS:
+                return False
+            folder = Path(job['folder'])
+            source = Path(job.get('source') or '')
+            output = Path(job.get('output') or '')
+            root = core.ROOT.resolve()
+            if folder.is_symlink() or folder.resolve().parent != root: return False
+            if source.is_symlink() or output.is_symlink() or not source.is_file() or not output.is_file(): return False
+            if source.resolve().parent != folder.resolve() or output.resolve().parent != folder.resolve(): return False
+            if source.resolve() == output.resolve() or source.stat().st_ino == output.stat().st_ino: return False
+            source.unlink()
+            job['source_removed'] = True
+            job['source_removed_at'] = time.time()
+            job['size_gib'] = round(output.stat().st_size / 2**30, 1)
+            self.set(detail=confirm_name + ': MKV originale rimosso; film finale conservato.',
+                     log=confirm_name + ': originale rimosso ' + ('dopo 48 ore.' if automatic else 'su conferma.'),
+                     queue=self.state['queue'])
+            global STORAGE_CACHE
+            with STORAGE_LOCK:
+                STORAGE_CACHE = (0, None)
+        return True
+
+    def cleanup_due_sources(self):
+        with self.lock:
+            due = [(index, job['name']) for index, job in enumerate(self.state['queue'])
+                   if job.get('status') == 'completato' and 'title_id' in job
+                   and job.get('verified_at') and not job.get('source_removed')
+                   and time.time() - float(job['verified_at']) >= SOURCE_RETENTION_SECONDS]
+        for index, name in due:
+            self.remove_verified_source(index, name, automatic=True)
+
     def retry_errors(self):
         with self.lock:
             if self.encoding or self.desktop_active():return False
@@ -681,7 +746,7 @@ class Manager:
                     self.set('Verifica','Controllo '+name+'…',99)
                     core.verify(meta,partial,subs,plan)
                     partial.rename(out)
-                    job['status']='completato';job['output']=str(out)
+                    job['status']='completato';job['output']=str(out);job['verified_at']=time.time()
                     if job.get('catalog_title'):
                         try:
                             metadata = job.get('catalog_metadata') or {
@@ -807,6 +872,8 @@ class Handler(BaseHTTPRequestHandler):
                 queue = []
                 for job in manager.state['queue']:
                     item = dict(job)
+                    if item['status'] == 'completato' and 'title_id' in item:
+                        item['source_present'] = Path(item.get('source') or '').is_file()
                     if item['status'] == 'estrazione':
                         try:
                             size = max((p.stat().st_size for p in Path(item['folder']).glob('*.mkv')), default=0)
@@ -888,6 +955,13 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     ok = manager.set_catalog(index, payload['title'], payload.get('year'))
             except (ValueError, KeyError, TypeError, OSError, TimeoutError, json.JSONDecodeError):
+                ok = False
+        elif self.path.startswith(BASE+'/source/remove/'):
+            try:
+                payload = self.read_json()
+                index = int(self.path.rsplit('/', 1)[1])
+                ok = manager.remove_verified_source(index, payload.get('confirm_name'))
+            except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
                 ok = False
         else:
             self.send_error(404);return

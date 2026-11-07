@@ -1,4 +1,4 @@
-# DiscFlow 0.17.1 · coda DVD, catalogo e app Android
+# DiscFlow 0.17.2 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -221,4 +221,6 @@ La pagina dei lavori mostra il DVD più recente in alto, usa righe compatte e ma
 
 La lista operativa dei film è una tabella compatta: intestazioni ordinabili, filtri per titolo, stato, durata minima, dimensione minima, metodo e origine, massimo 20 righe per pagina. **Più recenti prima** ripristina l’ordine iniziale. Il pulsante **Apri catalogo e lettore** è l’azione principale accanto alla tabella.
 
-La dashboard mostra un grafico a torta della capienza del disco: MKV originali acquisiti, file di lavoro e anteprime, film finali, sistema/altri dati e spazio libero. I valori sono calcolati sui file DiscFlow e sullo spazio effettivo del filesystem, aggiornati ogni 15 secondi.
+La dashboard mostra un grafico a torta di MKV originali acquisiti, file di lavoro e anteprime, film finali e spazio libero. I dati del sistema non compaiono e non sono inclusi nel totale del grafico. I valori si aggiornano ogni 15 secondi.
+
+L'MKV originale viene rimosso automaticamente 48 ore dopo la verifica del film finale. Per i film già presenti al momento dell'aggiornamento, le 48 ore partono dall'installazione della nuova versione. Puoi rimuoverlo prima con **Rimuovi originale** e una conferma sul singolo film. Il film finale e gli eventuali file parziali restano.

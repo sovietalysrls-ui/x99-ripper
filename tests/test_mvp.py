@@ -1,8 +1,8 @@
 import json
 import io
-from types import SimpleNamespace
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 import urllib.request
@@ -17,7 +17,41 @@ import film_library
 
 
 class QueueTests(unittest.TestCase):
-    def test_storage_chart_separates_source_work_final_and_free(self):
+    def test_verified_source_requires_its_own_final_and_explicit_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root / 'Film'
+            folder.mkdir()
+            source = folder / 'B1_t00.mkv'
+            output = folder / 'Film_H265.mkv'
+            source.write_bytes(b'original')
+            output.write_bytes(b'final')
+            manager = object.__new__(web.Manager)
+            manager.lock = threading.RLock()
+            manager.busy = manager.encoding = False
+            manager.desktop_active = lambda: False
+            manager.state = {'queue': [{'name': 'Film', 'title_id': 0, 'status': 'completato',
+                                        'verified_at': time.time(),
+                                        'folder': str(folder), 'source': str(source), 'output': str(output)}]}
+            manager.set = lambda **kwargs: None
+            with mock.patch.object(web.core, 'ROOT', root):
+                self.assertFalse(manager.remove_verified_source(0, 'Altro'))
+                self.assertTrue(source.exists())
+                output.unlink()
+                self.assertFalse(manager.remove_verified_source(0, 'Film'))
+                output.write_bytes(b'final')
+                manager.cleanup_due_sources()
+                self.assertTrue(source.exists())
+                manager.state['queue'][0]['verified_at'] -= web.SOURCE_RETENTION_SECONDS + 1
+                manager.cleanup_due_sources()
+                self.assertFalse(source.exists())
+                source.write_bytes(b'original')
+                self.assertTrue(manager.remove_verified_source(0, 'Film'))
+            self.assertFalse(source.exists())
+            self.assertTrue(output.exists())
+            self.assertTrue(manager.state['queue'][0]['source_removed'])
+
+    def test_storage_chart_counts_only_discflow_files(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / 'media'
             root.mkdir()
@@ -27,10 +61,9 @@ class QueueTests(unittest.TestCase):
             (root / 'Film_H265.mkv').write_bytes(b'b' * 80)
             (root / 'Film_H265.parziale.mkv').write_bytes(b'c' * 40)
             (preview / 'browser.mp4').write_bytes(b'd' * 20)
-            with mock.patch.object(web.shutil, 'disk_usage', return_value=SimpleNamespace(total=1000, free=300)):
+            with mock.patch.object(web.shutil, 'disk_usage', return_value=mock.Mock(free=300)):
                 values = web.measure_storage(root, preview)
-            self.assertEqual(values, {'total': 1000, 'sources': 100, 'work': 60,
-                                      'final': 80, 'other': 460, 'free': 300})
+            self.assertEqual(values, {'sources': 100, 'work': 60, 'final': 80, 'free': 300})
 
     def test_imprecise_title_finds_italian_film_without_suggesting_people(self):
         def wikipedia(req, timeout):
