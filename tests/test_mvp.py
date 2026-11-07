@@ -1,5 +1,6 @@
 import json
 import io
+import hashlib
 import tempfile
 import threading
 import time
@@ -17,6 +18,56 @@ import film_library
 
 
 class QueueTests(unittest.TestCase):
+    def test_x99_import_checks_hash_and_registers_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'media';root.mkdir()
+            state = Path(temp) / 'state'
+            staged_name = 'a' * 32 + '/film.mkv.part'
+            staged = state / 'incoming' / staged_name
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(b'video' * 25_000)
+            digest = hashlib.sha256(staged.read_bytes()).hexdigest()
+            manager = object.__new__(web.Manager)
+            manager.lock = threading.RLock()
+            manager.state = {'queue': []}
+            manager.set = lambda **values: manager.state.update(values)
+            media = {'format': {'duration': '5400'}}
+            def tracks(_, kind): return [{'codec_name': 'hevc'}] if kind == 'video' else [{}]
+            with mock.patch.object(web.core, 'ROOT', root), mock.patch.object(web.core, 'STATE', state), \
+                 mock.patch.object(web.core, 'probe', return_value=media), \
+                 mock.patch.object(web.core, 'tracks', side_effect=tracks), \
+                 mock.patch.object(web.core, 'verify_decode_samples'), \
+                 mock.patch.object(web, 'catalog_automatically'):
+                with self.assertRaises(ValueError):
+                    manager.import_external_final(staged_name, '0' * 64, 'Film X99')
+                self.assertTrue(staged.exists())
+                output = manager.import_external_final(staged_name, digest, 'Film X99')
+                self.assertTrue(output.is_file())
+                self.assertFalse(staged.exists())
+                self.assertEqual(manager.state['queue'][0]['status'], 'completato')
+                second_name = 'b' * 32 + '/film.mkv.part'
+                second = state / 'incoming' / second_name
+                second.parent.mkdir(parents=True)
+                second.write_bytes(b'video' * 25_000)
+                with self.assertRaises(FileExistsError):
+                    manager.import_external_final(second_name, digest, 'Film X99')
+                self.assertTrue(second.exists())
+                self.assertEqual(output.read_bytes(), b'video' * 25_000)
+
+    def test_disc_read_retry_preserves_incomplete_file(self):
+        self.assertTrue(web.has_disc_read_error('MEDIUM ERROR:L-EC UNCORRECTABLE ERROR'))
+        self.assertTrue(ripper.has_disc_read_error('I/O error'))
+        self.assertFalse(web.has_disc_read_error('registration key expired'))
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            incomplete = folder / 'B1_t00.mkv'
+            incomplete.write_bytes(b'incomplete')
+            archived = ripper.archive_failed_acquisition(folder, 1)
+            self.assertEqual(len(archived), 1)
+            self.assertFalse(incomplete.exists())
+            self.assertEqual(archived[0].read_bytes(), b'incomplete')
+            self.assertEqual(web.archive_failed_acquisition(folder, 2), [])
+
     def test_verified_source_requires_its_own_final_and_explicit_confirmation(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

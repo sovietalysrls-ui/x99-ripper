@@ -38,6 +38,26 @@ AUTO_CATALOG_LOCK = threading.Lock()
 STORAGE_LOCK = threading.Lock()
 STORAGE_CACHE = (0, None)
 SOURCE_RETENTION_SECONDS = 48 * 3600
+READ_ATTEMPTS = 3
+READ_RETRY_DELAY = 20
+
+
+def has_disc_read_error(message):
+    text = message.lower()
+    return any(marker in text for marker in ('medium error', 'uncorrectable error',
+                                           'i/o error', 'read error'))
+
+
+def archive_failed_acquisition(folder, attempt):
+    """Preserve incomplete MKVs before another MakeMKV attempt in the same folder."""
+    archived = []
+    for path in folder.glob('*.mkv'):
+        if path.is_symlink() or 'interrotto-' in path.name.lower(): continue
+        target = path.with_name(path.stem + f'.interrotto-{attempt}-{int(time.time())}.mkv')
+        if target.exists(): raise FileExistsError(target)
+        path.rename(target)
+        archived.append(target)
+    return archived
 STREAM_SECRET_FILE = core.STATE / 'stream-secret'
 STREAM_SECRET_LOCK = threading.Lock()
 STREAM_SECRET = None
@@ -191,6 +211,8 @@ def catalog_automatically(paths=None):
                         for job in manager.state['queue']:
                             if job.get('output') == str(path):
                                 job['output'] = str(renamed)
+                                job['catalog_title'] = choice['title']
+                                job['catalog_year'] = choice.get('year')
                         manager.set(queue=manager.state['queue'])
             except (OSError, ValueError, KeyError, FileExistsError):
                 continue
@@ -402,6 +424,8 @@ class Manager:
                                         self.set(percent=active['percent'], detail=active['name']+' · '+m.group(1)+'%', queue=self.state['queue'])
                         elif line.startswith('PRGV:'):
                             self.set(detail='MakeMKV sta leggendo il DVD…')
+                        elif line.startswith(('MSG:2003','MSG:2004')) and has_disc_read_error(line):
+                            self.set(detail='DVD difficile: MakeMKV sta riprovando la lettura dei settori.')
                     line = ''
                 else:
                     line = (line + ch)[-4000:]
@@ -489,13 +513,28 @@ class Manager:
 
     def workflow(self):
         try:
-            self.set('Rilevamento', 'Cerco il titolo principale…', 0)
-            p = subprocess.run(['makemkvcon', '-r', 'info', 'dev:' + core.DEVICE],
-                               capture_output=True, text=True, timeout=240)
-            text = p.stdout + p.stderr
-            titles = core.titles_from_robot(text)
+            titles = []
+            for attempt in range(1, READ_ATTEMPTS + 1):
+                if attempt > 1 and not self.media_present():
+                    raise RuntimeError('DVD rimosso: tentativi di lettura interrotti.')
+                self.set('Rilevamento', f'Cerco i titoli del DVD · tentativo {attempt}/{READ_ATTEMPTS}…', 0)
+                try:
+                    p = subprocess.run(['makemkvcon', '-r', 'info', 'dev:' + core.DEVICE],
+                                       capture_output=True, text=True, timeout=600)
+                except subprocess.TimeoutExpired:
+                    if attempt == READ_ATTEMPTS or not self.media_present():
+                        raise RuntimeError('La lettura del DVD non risponde dopo tre tentativi.')
+                    self.set(log=f'Scansione troppo lenta: nuovo tentativo tra {READ_RETRY_DELAY} secondi.')
+                    time.sleep(READ_RETRY_DELAY)
+                    continue
+                text = p.stdout + p.stderr
+                titles = core.titles_from_robot(text)
+                if titles: break
+                if not has_disc_read_error(text) or attempt == READ_ATTEMPTS or not self.media_present(): break
+                self.set(log=f'Lettura difficile: riprovo la scansione tra {READ_RETRY_DELAY} secondi ({attempt}/{READ_ATTEMPTS}).')
+                time.sleep(READ_RETRY_DELAY)
             if not titles:
-                raise RuntimeError('Nessun titolo DVD trovato. Controlla il disco o il log di MakeMKV.')
+                raise RuntimeError('Nessun titolo DVD trovato dopo i tentativi di lettura. Pulisci il disco e reinseriscilo.')
             def seconds(t):
                 try:
                     h, m, s = map(int, t['duration'].split(':')); return h*3600+m*60+s
@@ -520,9 +559,27 @@ class Manager:
             with self.lock:
                 self.set('Estrazione', 'Estraggo ' + name + '…', 0,
                          job=queued, queue=self.state['queue'] + [queued])
-            rc = self.run(['makemkvcon','-r','mkv','dev:'+core.DEVICE,str(title['id']),str(folder)], folder/'estrazione.log')
-            if rc: raise RuntimeError('MakeMKV si è fermato. Controlla estrazione.log; i file restano conservati.')
-            files = sorted(folder.glob('*.mkv'), key=lambda p:p.stat().st_size, reverse=True)
+            logpath = folder/'estrazione.log'
+            for attempt in range(1, READ_ATTEMPTS + 1):
+                if attempt > 1 and not self.media_present():
+                    raise RuntimeError('DVD rimosso: tentativi di estrazione interrotti.')
+                queued['read_attempt'] = attempt
+                self.set('Estrazione', f'{name} · tentativo {attempt}/{READ_ATTEMPTS}', 0,
+                         job=queued, queue=self.state['queue'])
+                log_start = logpath.stat().st_size if logpath.exists() else 0
+                rc = self.run(['makemkvcon','-r','mkv','dev:'+core.DEVICE,str(title['id']),str(folder)], logpath)
+                if rc == 0: break
+                with logpath.open('rb') as stream:
+                    stream.seek(log_start)
+                    attempt_log = stream.read().decode(errors='replace')
+                if not has_disc_read_error(attempt_log) or attempt == READ_ATTEMPTS:
+                    raise RuntimeError(f'MakeMKV si è fermato dopo {attempt} tentativi. Controlla estrazione.log; i file restano conservati.')
+                archived = archive_failed_acquisition(folder, attempt)
+                self.set(log=f'Errore di lettura al tentativo {attempt}/{READ_ATTEMPTS}. '
+                             f'Conservo {len(archived)} file incompleti e riprovo tra {READ_RETRY_DELAY} secondi.')
+                time.sleep(READ_RETRY_DELAY)
+            files = sorted((p for p in folder.glob('*.mkv') if 'interrotto-' not in p.name.lower()),
+                           key=lambda p:p.stat().st_size, reverse=True)
             if not files: raise RuntimeError('Nessun MKV estratto.')
             source = files[0]
             core.probe(source)
@@ -670,6 +727,50 @@ class Manager:
                    and time.time() - float(job['verified_at']) >= SOURCE_RETENTION_SECONDS]
         for index, name in due:
             self.remove_verified_source(index, name, automatic=True)
+
+    def import_external_final(self, staged, digest, title_hint):
+        """Register a checked X99 final without touching any existing film."""
+        if not re.fullmatch(r'[0-9a-f]{32}/film\.mkv\.part', staged or ''):
+            raise ValueError('Percorso di importazione non valido.')
+        if not re.fullmatch(r'[0-9a-f]{64}', digest or ''):
+            raise ValueError('Impronta del file non valida.')
+        if not isinstance(title_hint, str) or not 1 <= len(title_hint) <= 120:
+            raise ValueError('Titolo mancante o troppo lungo.')
+        incoming = core.STATE / 'incoming'
+        path = incoming / staged
+        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(incoming.resolve()):
+            raise ValueError('File trasferito non trovato.')
+        if path.stat().st_size < 100_000:
+            raise ValueError('File trasferito troppo piccolo.')
+        with path.open('rb') as source:
+            measured = hashlib.file_digest(source, 'sha256').hexdigest()
+        if not hmac.compare_digest(measured, digest):
+            raise ValueError('La copia non corrisponde all’originale: importazione annullata.')
+        media = core.probe(path)
+        video = core.tracks(media, 'video')
+        if len(video) != 1 or video[0].get('codec_name') != 'hevc' or not core.tracks(media, 'audio'):
+            raise ValueError('Serve un film finale HEVC con audio.')
+        duration = float(media['format']['duration'])
+        core.verify_decode_samples(path, duration)
+        name = core.safe_name(title_hint)
+        folder = core.ROOT / name
+        output = folder / (name + '_H265.mkv')
+        with self.lock:
+            if folder.exists() or any(j.get('name') == name or j.get('output') == str(output)
+                                      for j in self.state['queue']):
+                raise FileExistsError('Questo film è già presente: nessun file è stato sovrascritto.')
+            folder.mkdir()
+            path.replace(output)
+            job = {'name': name, 'folder': str(folder), 'source': '', 'output': str(output),
+                   'status': 'completato', 'verified_at': time.time(), 'source_removed': True,
+                   'duration_seconds': round(duration),
+                   'size_gib': round(output.stat().st_size / 2**30, 1), 'encoder': 'x99'}
+            self.set(detail=name + ' importato dall’X99 e verificato.',
+                     log=name + ': importato dall’X99.', queue=self.state['queue'] + [job])
+            global STORAGE_CACHE
+            with STORAGE_LOCK: STORAGE_CACHE = (0, None)
+        threading.Thread(target=catalog_automatically, args=([output],), daemon=True).start()
+        return output
 
     def retry_errors(self):
         with self.lock:
@@ -903,6 +1004,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed(): return
         if not secrets.compare_digest(self.headers.get('X-Ripper-Token',''),TOKEN):
             self.send_error(403); return
+        if self.path == BASE+'/import/complete':
+            try:
+                payload = self.read_json()
+                output = manager.import_external_final(payload['staged'], payload['sha256'], payload['title'])
+                self.reply(json.dumps({'imported': str(output)}, ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError, FileExistsError) as exc:
+                self.reply_error(400, str(exc))
+            return
         if self.path == BASE+'/films/preview/start':
             try:
                 payload = self.read_json()
@@ -1024,6 +1133,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == '__main__':
     manager = Manager()
     threading.Thread(target=catalog_automatically, daemon=True).start()
+    if HOST != '127.0.0.1':
+        threading.Thread(target=ThreadingHTTPServer(('127.0.0.1', PORT), Handler).serve_forever,
+                         daemon=True).start()
     if TAILSCALE_HOST:
         threading.Thread(target=ThreadingHTTPServer((TAILSCALE_HOST, PORT), Handler).serve_forever,
                          daemon=True).start()

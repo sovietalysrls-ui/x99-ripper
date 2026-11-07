@@ -1,4 +1,4 @@
-# DiscFlow 0.17.3 · coda DVD, catalogo e app Android
+# DiscFlow 0.18.0 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -43,8 +43,8 @@ del DVD e la durata del film; rinomina il file finale e crea `movie.nfo` per
 Jellyfin solo quando la corrispondenza è sufficientemente chiara. Nei casi
 ambigui propone i risultati nella scheda del film e chiede di scegliere.
 Non serve una chiave API. Le copertine dipendono dalla disponibilità su
-Wikipedia; i film senza immagine restano senza copertina. Nessun file video
-viene eliminato automaticamente.
+Wikipedia; i film senza immagine restano senza copertina. I film finali
+non vengono eliminati automaticamente.
 
 Per impostazione predefinita legge la cartella di
 output e mostra solo i file `*_H265.mkv`, escludendo gli MKV sorgente. Per una
@@ -219,8 +219,14 @@ Nella pagina principale, ogni film pronto offre **Cerca**: scrivi anche poche pa
 
 La pagina dei lavori mostra il DVD più recente in alto, usa righe compatte e mantiene l’elenco in un’area a scorrimento limitata.
 
-La lista operativa dei film è una tabella compatta: intestazioni ordinabili, filtri per titolo, stato, durata minima, dimensione minima, metodo e origine, massimo 20 righe per pagina. **Più recenti prima** ripristina l’ordine iniziale. Il pulsante **Apri catalogo e lettore** è l’azione principale accanto alla tabella.
+La lista operativa dei film è una tabella compatta: intestazioni ordinabili, filtri per titolo, stato, durata minima, dimensione minima, metodo e origine, massimo 6 righe per pagina. **Più recenti prima** ripristina l’ordine iniziale. Il pulsante **Apri catalogo e lettore** è l’azione principale accanto alla tabella.
 
 La dashboard mostra un grafico a torta di MKV originali acquisiti, file di lavoro e anteprime, film finali e spazio libero. I dati del sistema non compaiono e non sono inclusi nel totale del grafico. I valori si aggiornano ogni 15 secondi.
+
+## DVD difficili e invio dall'X99
+
+Su entrambi i computer DiscFlow lascia a MakeMKV il tempo di rileggere i settori problematici. Se una scansione o un'estrazione fallisce con un errore di lettura, prova fino a tre passaggi, con 20 secondi di pausa. Gli MKV incompleti vengono rinominati e conservati; non sono trattati come film finiti. Un disco realmente illeggibile può comunque fallire. L'app non salta i dati errati né aggira protezioni DRM.
+
+Sull'X99 usa il lettore Blu-ray e il programma desktop aggiornato. Dopo la verifica del film finale, selezionalo nei **Lavori** e premi **Invia all’OptiPlex**. Il trasferimento usa SSH e rsync, confronta SHA-256, verifica audio, video e due campioni di riproduzione, quindi aggiunge il film alla tabella e al catalogo dell'OptiPlex. Non sovrascrive un film già presente e non elimina la copia sull'X99. Serve la connessione SSH già configurata tra i due computer. Da terminale, lo stesso invio si può avviare con `python3 ~/.local/share/x99-ripper/send_to_optiplex.py '/percorso/Film_H265.mkv'`; `--resume ID` riprende una copia interrotta usando l'ID mostrato dal comando.
 
 L'MKV originale viene rimosso automaticamente 48 ore dopo la verifica del film finale. Per i film già presenti al momento dell'aggiornamento, le 48 ore partono dall'installazione della nuova versione. Puoi eliminarlo prima con **Elimina originale** nella colonna **Azioni** e una conferma sul singolo film. Il film finale e gli eventuali file parziali restano.

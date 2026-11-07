@@ -8,6 +8,7 @@ import re
 import signal
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -29,6 +30,26 @@ DURATION = re.compile(r'\b\d{1,2}:\d{2}:\d{2}\b')
 CROP = re.compile(r'autocrop\s*[=:]\s*(\d+)/(\d+)/(\d+)/(\d+)', re.I)
 MAKEMKV_KEY_PAGE = 'https://forum.makemkv.com/forum/viewtopic.php?f=5&t=1053'
 LICENSE_ERROR = re.compile(r'evaluation period (?:has )?expired|shareware functionality unavailable|registration key|activation key|license (?:key|expired)', re.I)
+READ_ATTEMPTS = 3
+READ_RETRY_DELAY = 20
+
+
+def has_disc_read_error(message):
+    text = message.lower()
+    return any(marker in text for marker in ('medium error', 'uncorrectable error',
+                                           'i/o error', 'read error'))
+
+
+def archive_failed_acquisition(folder, attempt):
+    """Keep incomplete MKVs when MakeMKV needs a new pass over the disc."""
+    archived = []
+    for path in folder.glob('*.mkv'):
+        if path.is_symlink() or 'interrotto-' in path.name.lower(): continue
+        target = path.with_name(path.stem + f'.interrotto-{attempt}-{int(time.time())}.mkv')
+        if target.exists(): raise FileExistsError(target)
+        path.rename(target)
+        archived.append(target)
+    return archived
 
 
 def robot_fields(line):
@@ -276,6 +297,7 @@ class App:
         self.scan_busy = False
         self.extract_busy = False
         self.encode_busy = False
+        self.transfer_busy = False
         self.disc_titles = []
         self.selected_job = None
         self.drive_lock = threading.Lock()
@@ -402,6 +424,8 @@ class App:
         ttk.Label(jobs_head,text='Lavori',style='Section.TLabel').pack(side='left')
         self.details_button=ttk.Button(jobs_head,text='Mostra dettagli',style='App.TButton',command=self.toggle_details)
         self.details_button.pack(side='right')
+        ttk.Button(jobs_head,text='Invia all’OptiPlex',style='App.TButton',
+                   command=self.send_selected_to_optiplex).pack(side='right',padx=(0,8))
         self.job_list=ttk.Treeview(jobs,columns=('name','status','source','output'),show='headings',height=2,style='Jobs.Treeview')
         for c,label,w in [('name','Film',150),('status','Fase',130),('source','Intermedio',235),('output','Risultato',235)]:
             self.job_list.heading(c,text=label);self.job_list.column(c,width=w)
@@ -565,7 +589,7 @@ class App:
                     if ch in '\r\n':
                         if line:
                             f.write(line+'\n'); f.flush()
-                            if line.startswith('MSG:2004'):
+                            if line.startswith(('MSG:2003','MSG:2004')):
                                 self.events.put(('warning','Il lettore ha segnalato un errore di lettura. L’app continua e verificherà il risultato.'))
                             if (line.startswith(('PRGV:','Progress:','Encoding:','MSG:','Muxing:'))
                                     and time.monotonic()-last_update>1):
@@ -586,9 +610,22 @@ class App:
         def work():
             try:
                 properties=optical_properties()
-                with self.drive_lock:
-                    p=subprocess.run(['makemkvcon','-r','info','dev:'+DEVICE],capture_output=True,text=True,timeout=180)
-                titles=titles_from_robot(p.stdout)
+                for attempt in range(1, READ_ATTEMPTS + 1):
+                    if attempt > 1 and optical_properties().get('ID_CDROM_MEDIA') != '1':
+                        raise RuntimeError('Disco rimosso: scansione interrotta.')
+                    self.events.put(('progress',f'Cerco i titoli · tentativo {attempt}/{READ_ATTEMPTS}'))
+                    try:
+                        with self.drive_lock:
+                            p=subprocess.run(['makemkvcon','-r','info','dev:'+DEVICE],capture_output=True,text=True,timeout=600)
+                    except subprocess.TimeoutExpired:
+                        if attempt == READ_ATTEMPTS: raise RuntimeError('Il lettore non risponde dopo tre tentativi.')
+                        self.events.put(('warning','Lettura lenta: riprovo la scansione.'))
+                        time.sleep(READ_RETRY_DELAY)
+                        continue
+                    titles=titles_from_robot(p.stdout)
+                    if titles or not has_disc_read_error(p.stdout+p.stderr) or attempt == READ_ATTEMPTS: break
+                    self.events.put(('warning',f'Errore di lettura: riprovo la scansione ({attempt}/{READ_ATTEMPTS}).'))
+                    time.sleep(READ_RETRY_DELAY)
                 disc_type=disc_type_from_robot(p.stdout)
                 if disc_type=='unknown' and bluray_media(properties):disc_type='blu-ray'
                 if disc_type=='unknown' and bluray_capable(properties) and LICENSE_ERROR.search(p.stdout):
@@ -621,15 +658,27 @@ class App:
         def work():
             logpath=folder/'estrazione.log'
             try:
-                with self.drive_lock:
-                    rc=self.run_logged(['makemkvcon','-r','mkv','dev:'+DEVICE,str(title_id),str(folder)],logpath)
-                if rc:
-                    recent=logpath.read_text(errors='replace')[-8000:]
+                for attempt in range(1, READ_ATTEMPTS + 1):
+                    if attempt > 1 and optical_properties().get('ID_CDROM_MEDIA') != '1':
+                        raise RuntimeError('Disco rimosso: tentativi di estrazione interrotti.')
+                    j['read_attempt']=attempt;self.save()
+                    self.events.put(('progress',f'Estrazione · tentativo {attempt}/{READ_ATTEMPTS}'))
+                    log_start=logpath.stat().st_size if logpath.exists() else 0
+                    with self.drive_lock:
+                        rc=self.run_logged(['makemkvcon','-r','mkv','dev:'+DEVICE,str(title_id),str(folder)],logpath)
+                    if rc == 0: break
+                    with logpath.open('rb') as stream:
+                        stream.seek(log_start)
+                        recent=stream.read().decode(errors='replace')
                     if j['disc_type']=='blu-ray' and LICENSE_ERROR.search(recent):
                         self.events.put(('bluray_license_error',j['id']))
                         raise RuntimeError('MakeMKV segnala una chiave scaduta o non valida. Apri la pagina ufficiale e registra una chiave valida; intermedio conservato.')
-                    raise RuntimeError(f'MakeMKV terminato con codice {rc}. Consultare estrazione.log.')
-                files=list(folder.glob('*.mkv'))
+                    if not has_disc_read_error(recent) or attempt == READ_ATTEMPTS:
+                        raise RuntimeError(f'MakeMKV terminato con codice {rc} dopo {attempt} tentativi. Consultare estrazione.log.')
+                    archived=archive_failed_acquisition(folder,attempt)
+                    self.events.put(('warning',f'Disco difficile: {len(archived)} file incompleti conservati; riprovo tra {READ_RETRY_DELAY} secondi.'))
+                    time.sleep(READ_RETRY_DELAY)
+                files=[p for p in folder.glob('*.mkv') if 'interrotto-' not in p.name.lower()]
                 if len(files)!=1:raise RuntimeError(f'Atteso 1 MKV, trovati {len(files)}. Controllare la cartella.')
                 source=files[0]; probe(source)
                 self.events.put(('extracted',(j['id'],str(source))))
@@ -802,6 +851,25 @@ class App:
         j=self.selected()
         if j:subprocess.Popen(['xdg-open',j['folder']])
 
+    def send_selected_to_optiplex(self):
+        j=self.selected()
+        if not j or j.get('status') != 'verificato' or not Path(j.get('output') or '').is_file():
+            messagebox.showinfo('Invio film','Seleziona un film completato e verificato.');return
+        if self.transfer_busy:
+            messagebox.showinfo('Invio film','Attendi che il trasferimento in corso finisca.');return
+        self.transfer_busy=True
+        self.status.set('Copia verificata verso l’OptiPlex in corso…')
+        def work():
+            try:
+                result=subprocess.run([sys.executable,str(Path(__file__).with_name('send_to_optiplex.py')),
+                                       j['output']],capture_output=True,text=True,timeout=7200)
+                if result.returncode:
+                    raise RuntimeError((result.stdout + '\n' + result.stderr)[-700:])
+                self.events.put(('transfer_done',(j['id'],result.stdout.strip())))
+            except (OSError,RuntimeError,subprocess.TimeoutExpired) as exc:
+                self.events.put(('transfer_error',str(exc)))
+        threading.Thread(target=work,daemon=True).start()
+
     def remove_intermediate(self):
         j=self.selected()
         if not j or j['status']!='verificato':
@@ -899,6 +967,11 @@ class App:
                     jid,msg=data;j=self.by_id(jid);j['status']='errore';j['error']=msg;self.save();self.refresh_jobs();self.status.set(j['name']+': '+msg);self.append('ERRORE '+msg)
                 elif typ=='extract_done':self.extract_busy=False
                 elif typ=='encode_done':self.encode_busy=False
+                elif typ=='transfer_done':
+                    self.transfer_busy=False;self.by_id(data[0])['sent_to_optiplex']=True
+                    self.save();self.status.set('Film disponibile sull’OptiPlex.');self.append(data[1])
+                elif typ=='transfer_error':
+                    self.transfer_busy=False;self.status.set('Invio all’OptiPlex non riuscito.');self.append('ERRORE invio: '+data)
         except queue.Empty:pass
         self.root.after(150,self.pump)
 
@@ -908,8 +981,8 @@ class App:
         try:h,m,s=map(int,d.split(':'));return h*3600+m*60+s
         except ValueError:return 0
     def close(self):
-        if self.extract_busy or self.encode_busy:
-            messagebox.showinfo('Operazione in corso','Attendere la fine dell’estrazione o compressione prima di chiudere.');return
+        if self.extract_busy or self.encode_busy or self.transfer_busy:
+            messagebox.showinfo('Operazione in corso','Attendere la fine dell’estrazione, compressione o invio prima di chiudere.');return
         self.root.destroy()
 
 
