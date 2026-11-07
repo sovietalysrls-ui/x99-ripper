@@ -51,7 +51,7 @@ L'MKV acquisito e gli eventuali tentativi parziali restano nella cartella del fi
 
 ## Versione e ripristino
 
-La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.16.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
+La versione installata è basata sul branch GitHub `feat/discflow-ai-mvp`, tag `v0.17.0`. Il codice precedente è conservato nel tag `baseline/optiplex-working-0.6.2`; prima dell'aggiornamento è stata salvata anche una copia locale in `~/backup-discflow-20261106-2145/`. Per ripristinare, ferma il servizio web DiscFlow, copia i file dell'applicazione e dello stato da quel backup e riavvia il servizio. Non usare contemporaneamente la finestra desktop e la coda web.
 
 DiscFlow usa MakeMKV e HandBrake già installati. Non include chiavi né funzioni per aggirare protezioni DRM.
 
@@ -70,3 +70,5 @@ Nella pagina dei lavori in attesa, scrivi un indizio nel campo del DVD e premi *
 La lista **Film** nella pagina principale mostra i lavori più recenti in alto. Scorri all’interno della lista per vedere i lavori più vecchi.
 
 La lista **Film** è una tabella: premi un’intestazione per ordinare, usa i campi sotto le intestazioni per filtrare e i pulsanti sotto la tabella per sfogliare gruppi di 20. **Più recenti prima** ripristina l’ordine iniziale. **Apri catalogo e lettore** porta alla visione e ai dettagli dei film completati.
+
+Nella parte alta della dashboard, **Spazio sul disco** mostra capienza e spazio libero insieme alle quote occupate da DVD/Blu-ray acquisiti, file di lavoro (incluse anteprime e copie interrotte), film finali e altri dati del sistema.

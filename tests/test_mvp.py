@@ -1,5 +1,6 @@
 import json
 import io
+from types import SimpleNamespace
 import tempfile
 import threading
 import unittest
@@ -16,6 +17,21 @@ import film_library
 
 
 class QueueTests(unittest.TestCase):
+    def test_storage_chart_separates_source_work_final_and_free(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'media'
+            root.mkdir()
+            preview = Path(temp) / 'previews'
+            preview.mkdir()
+            (root / 'B1_t00.mkv').write_bytes(b'a' * 100)
+            (root / 'Film_H265.mkv').write_bytes(b'b' * 80)
+            (root / 'Film_H265.parziale.mkv').write_bytes(b'c' * 40)
+            (preview / 'browser.mp4').write_bytes(b'd' * 20)
+            with mock.patch.object(web.shutil, 'disk_usage', return_value=SimpleNamespace(total=1000, free=300)):
+                values = web.measure_storage(root, preview)
+            self.assertEqual(values, {'total': 1000, 'sources': 100, 'work': 60,
+                                      'final': 80, 'other': 460, 'free': 300})
+
     def test_imprecise_title_finds_italian_film_without_suggesting_people(self):
         def wikipedia(req, timeout):
             url = req.full_url

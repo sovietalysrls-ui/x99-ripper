@@ -1,4 +1,4 @@
-# DiscFlow 0.16.0 · coda DVD, catalogo e app Android
+# DiscFlow 0.17.0 · coda DVD, catalogo e app Android
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.
@@ -220,3 +220,5 @@ Nella pagina principale, ogni film pronto offre **Cerca**: scrivi anche poche pa
 La pagina dei lavori mostra il DVD più recente in alto, usa righe compatte e mantiene l’elenco in un’area a scorrimento limitata.
 
 La lista operativa dei film è una tabella compatta: intestazioni ordinabili, filtri per titolo, stato, durata minima, dimensione minima, metodo e origine, massimo 20 righe per pagina. **Più recenti prima** ripristina l’ordine iniziale. Il pulsante **Apri catalogo e lettore** è l’azione principale accanto alla tabella.
+
+La dashboard mostra un grafico a torta della capienza del disco: MKV originali acquisiti, file di lavoro e anteprime, film finali, sistema/altri dati e spazio libero. I valori sono calcolati sui file DiscFlow e sullo spazio effettivo del filesystem, aggiornati ogni 15 secondi.

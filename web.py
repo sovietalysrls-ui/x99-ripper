@@ -35,6 +35,8 @@ DESKTOP_MEDIA_CACHE = {}
 COMPLETED_CUSTOM = bool(os.environ.get('X99_RIPPER_COMPLETED_DIR'))
 COMPLETED_DIR = Path(os.environ.get('X99_RIPPER_COMPLETED_DIR') or core.ROOT).expanduser().resolve()
 AUTO_CATALOG_LOCK = threading.Lock()
+STORAGE_LOCK = threading.Lock()
+STORAGE_CACHE = (0, None)
 STREAM_SECRET_FILE = core.STATE / 'stream-secret'
 STREAM_SECRET_LOCK = threading.Lock()
 STREAM_SECRET = None
@@ -110,6 +112,49 @@ def completed_files():
         if completed_file(relative) == path.resolve():
             files.append(path)
     return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def measure_storage(root, preview_dir):
+    """Account for DiscFlow files on the media filesystem without double counting."""
+    usage = shutil.disk_usage(root)
+    device = root.stat().st_dev
+    totals = {'sources': 0, 'work': 0, 'final': 0}
+    seen = set()
+    def add(path, kind):
+        try:
+            if path.is_symlink() or not path.is_file(): return
+            stat = path.stat()
+            key = (stat.st_dev, stat.st_ino)
+            if stat.st_dev != device or key in seen: return
+            seen.add(key)
+            totals[kind] += stat.st_size
+        except OSError:
+            pass
+    for path in root.rglob('*'):
+        if path.suffix.lower() != '.mkv': continue
+        name = path.name.lower()
+        if name.endswith('_h265.mkv'):
+            add(path, 'final')
+        elif any(part in name for part in ('parziale', 'partial', 'interrotto', 'precedente', 'repaired')):
+            add(path, 'work')
+        else:
+            add(path, 'sources')
+    if preview_dir.is_dir():
+        for path in preview_dir.rglob('*.mp4'):
+            add(path, 'work')
+    totals['other'] = max(0, usage.total - usage.free - sum(totals.values()))
+    totals['free'] = usage.free
+    return {'total': usage.total, **totals}
+
+
+def storage_breakdown():
+    global STORAGE_CACHE
+    with STORAGE_LOCK:
+        if time.monotonic() - STORAGE_CACHE[0] < 15 and STORAGE_CACHE[1] is not None:
+            return STORAGE_CACHE[1]
+        measured = measure_storage(core.ROOT, film_preview.CACHE)
+        STORAGE_CACHE = (time.monotonic(), measured)
+        return measured
 
 
 def film_data():
@@ -778,7 +823,9 @@ class Handler(BaseHTTPRequestHandler):
                        'queue':queue,
                        'desktop_jobs':desktop_jobs(),
                        'free_gib':round(shutil.disk_usage(core.ROOT).free/2**30,1)}
-                data = json.dumps(state,ensure_ascii=False).encode()
+            try: state['storage'] = storage_breakdown()
+            except OSError: state['storage'] = None
+            data = json.dumps(state,ensure_ascii=False).encode()
             self.reply(data,'application/json'); return
         if self.path not in (BASE, BASE+'/'):
             self.send_error(404); return
