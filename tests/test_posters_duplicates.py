@@ -12,6 +12,16 @@ import web
 
 
 class PosterAndDuplicateTests(unittest.TestCase):
+    def test_only_configured_lan_client_can_open_dashboard(self):
+        handler = object.__new__(web.Handler)
+        handler.send_error = lambda code: setattr(handler, 'denied', code)
+        with mock.patch.object(web, 'ALLOWED_LAN_CLIENTS', {'192.168.4.41'}):
+            handler.client_address = ('192.168.4.41', 50000)
+            self.assertTrue(handler.allowed())
+            handler.client_address = ('192.168.4.42', 50000)
+            self.assertFalse(handler.allowed())
+            self.assertEqual(handler.denied, 403)
+
     def test_manual_poster_decodes_replaces_and_precedes_online_cover(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)

@@ -1,4 +1,12 @@
-# DiscFlow 0.21.0 · coda DVD, catalogo e app Android
+# DiscFlow 0.21.1 · coda DVD, catalogo e app Android
+
+## Caricamento locale dall’X99 (v0.21.1)
+
+Per i film grandi, apri `http://192.168.4.102:8766/ripper` dal browser dell’X99.
+Il collegamento è mostrato anche nella sezione **Importa un video** del sito pubblico.
+L’OptiPlex accetta il collegamento diretto solo dagli indirizzi indicati in
+`X99_RIPPER_ALLOWED_LAN_CLIENTS` nella configurazione locale; il proxy pubblico
+resta separato. Il trasferimento usa la rete locale e mostra l’avanzamento.
 
 ## Copertine e versioni alternative (v0.21.0)
 

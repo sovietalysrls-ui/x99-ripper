@@ -32,6 +32,8 @@ PORT = int(os.environ.get('X99_RIPPER_WEB_PORT', '8766'))
 HOST = os.environ.get('X99_RIPPER_WEB_HOST', '127.0.0.1')
 TAILSCALE_HOST = os.environ.get('X99_RIPPER_TAILSCALE_HOST', '')
 ALLOWED_PROXY = os.environ.get('X99_RIPPER_ALLOWED_PROXY', '')
+ALLOWED_LAN_CLIENTS = {address.strip() for address in
+                       os.environ.get('X99_RIPPER_ALLOWED_LAN_CLIENTS', '').split(',') if address.strip()}
 TELEGRAM_TOKEN = os.environ.get('X99_RIPPER_TELEGRAM_TOKEN', '')
 TELEGRAM_CHAT = os.environ.get('X99_RIPPER_TELEGRAM_CHAT_ID', '')
 DESKTOP_MEDIA_CACHE = {}
@@ -1232,7 +1234,7 @@ manager = None
 
 class Handler(BaseHTTPRequestHandler):
     def allowed(self):
-        if self.client_address[0] in ('127.0.0.1', ALLOWED_PROXY, HOST):
+        if self.client_address[0] in {'127.0.0.1', ALLOWED_PROXY, HOST} | ALLOWED_LAN_CLIENTS:
             return True
         self.send_error(403)
         return False
@@ -1360,7 +1362,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(data,'application/json'); return
         if self.path not in (BASE, BASE+'/'):
             self.send_error(404); return
-        page = Path(__file__).with_name('web.html').read_text().replace('TOKEN', TOKEN)
+        page = (Path(__file__).with_name('web.html').read_text()
+                .replace('LAN_URL', 'http://' + HOST + ':' + str(PORT) + BASE)
+                .replace('TOKEN', TOKEN))
         self.reply(page.encode(),'text/html; charset=utf-8')
 
     def do_POST(self):
