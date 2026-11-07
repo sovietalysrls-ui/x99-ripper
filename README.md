@@ -1,4 +1,22 @@
-# DiscFlow 0.18.1 · coda DVD, catalogo e app Android
+# DiscFlow 0.21.0 · coda DVD, catalogo e app Android
+
+## Copertine e versioni alternative (v0.21.0)
+
+Apri **Catalogo e lettore → Dettagli** e usa **Scegli copertina**. La pagina mostra
+un'anteprima; **Salva copertina** crea o sostituisce `poster.jpg` accanto al film.
+Accetta JPG, PNG e WebP fino a 10 MB, funziona offline e usa la copertina locale
+prima di quella di Wikipedia. Il file originale del film non viene modificato.
+
+Se il titolo del DVD corrisponde a un film già presente, DiscFlow chiede cosa fare
+prima dell'acquisizione. Se il nome del disco è generico, verifica di nuovo dopo
+l'estrazione e dopo la scelta dei metadati. **Annulla** lascia il film esistente
+intatto; **Salva altra versione** conserva entrambe; **Sostituisci** prepara la
+nuova copia e chiede un'altra conferma dopo la verifica. La versione precedente
+viene archiviata in `~/.local/state/x99-ripper/archived-films/`, fuori dal catalogo
+Jellyfin. Nessuna versione viene sovrascritta automaticamente. Quando i dati del
+disco non sono sufficienti per una corrispondenza attendibile, la verifica
+preventiva non può dare un avviso; la verifica successiva usa anche le impronte
+dei file sorgente se sono ancora disponibili.
 
 La pagina include **Catalogo e lettore**: mostra nel browser i file finali, con
 ricerca, filtro per genere, otto film per pagina e i più recenti in cima.

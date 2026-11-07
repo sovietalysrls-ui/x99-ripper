@@ -19,6 +19,7 @@ install -m 644 "$script_dir/web.py" "$install_dir/web.py"
 install -m 644 "$script_dir/web.html" "$install_dir/web.html"
 install -m 644 "$script_dir/films.html" "$install_dir/films.html"
 install -m 644 "$script_dir/film_library.py" "$install_dir/film_library.py"
+install -m 644 "$script_dir/duplicates.py" "$install_dir/duplicates.py"
 install -m 644 "$script_dir/film_preview.py" "$install_dir/film_preview.py"
 install -m 755 "$script_dir/receive_external.py" "$install_dir/receive_external.py"
 install -m 644 "$script_dir/manifest.webmanifest" "$install_dir/manifest.webmanifest"
@@ -56,4 +57,3 @@ systemctl --user daemon-reload
 systemctl --user enable --now x99-ripper-web.service
 systemctl --user restart x99-ripper-web.service
 systemctl --user enable --now x99-ripper-notify-desktop.service
-systemctl --user restart x99-ripper-notify-desktop.service

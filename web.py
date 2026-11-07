@@ -23,6 +23,7 @@ import ripper as core
 import film_library
 import film_preview
 import recover
+import duplicates
 
 BASE = '/ripper'
 STATE = core.STATE / 'web-state.json'
@@ -190,12 +191,17 @@ def film_data():
     result = []
     for path in completed_files():
         info = film_library.read(path)
+        local_poster = film_library.poster(path)
+        cover_url = (BASE + '/films/poster?path=' + urllib.parse.quote(path.relative_to(COMPLETED_DIR).as_posix())
+                     + '&v=' + str(local_poster.stat().st_mtime_ns)) if local_poster else info.get('cover_url', '')
         result.append({'path': path.relative_to(COMPLETED_DIR).as_posix(),
                        'title': info.get('title') or path.stem.removesuffix('_H265').replace('_', ' '),
                        'year': info.get('year'), 'director': info.get('director', []),
                        'cast': info.get('cast', []), 'genres': info.get('genres', []),
                        'imdb_id': info.get('imdb_id', ''), 'wikidata_id': info.get('wikidata_id', ''),
-                       'cover_url': info.get('cover_url', ''), 'cover_source': info.get('cover_source', ''),
+                       'cover_url': cover_url, 'cover_source': 'Copertina personale' if local_poster else info.get('cover_source', ''),
+                       'manual_cover': bool(local_poster),
+                       'version_label': info.get('version_label', ''),
                        'source': info.get('source', ''), 'filename': path.name,
                        'stream_url': signed_stream_url(path.relative_to(COMPLETED_DIR)),
                        'size': path.stat().st_size, 'modified': path.stat().st_mtime})
@@ -407,6 +413,10 @@ class Manager:
         tmp.write_text(json.dumps(self.state, ensure_ascii=False))
         tmp.replace(STATE)
 
+    def completed_source_lookup(self):
+        return {job['output']: job['source'] for job in self.state['queue']
+                if job.get('output') and job.get('source') and job.get('status') == 'completato'}
+
     def set(self, phase=None, detail=None, percent=None, log=None, **extra):
         with self.lock:
             if phase is not None: self.state['phase'] = phase
@@ -506,7 +516,7 @@ class Manager:
                     detail=current['name']+' · '+f'{size/2**30:.1f} GiB scritti'
                     if expected:detail+=' su circa '+f'{expected/2**30:.1f} GiB'
                     self.set(detail=detail,percent=percent)
-                if media and not self.last_media and not busy and not desktop:
+                if media and not self.last_media and not busy and not desktop and not self.state.get('duplicate_pending'):
                     self.start_scan()
                 elif desktop:
                     self.mirror_desktop()
@@ -526,7 +536,7 @@ class Manager:
     def start_scan(self):
         with self.lock:
             pending = sum(j['status'] in ('pronto','compressione') for j in self.state['queue'])
-            if self.busy or self.desktop_active() or pending >= self.state['max_discs']:
+            if self.busy or self.desktop_active() or pending >= self.state['max_discs'] or self.state.get('duplicate_pending'):
                 return False
             self.busy = True
         threading.Thread(target=self.workflow, daemon=True).start()
@@ -573,6 +583,15 @@ class Manager:
                                        for t in sorted(titles,key=seconds,reverse=True)],
                      selected_title_id=title['id'])
             name = core.safe_name(core.disc_label(text) or title['name'] or 'Film_' + time.strftime('%Y%m%d_%H%M'))
+            matches = duplicates.candidates(name, seconds(title), completed_files())
+            override = self.state.get('duplicate_override') or {}
+            if matches and override.get('name') != name:
+                self.set('Possibile duplicato', 'Controlla il film già presente prima di acquisire il DVD.', 0,
+                         duplicate_pending={'stage': 'disc', 'name': name, 'matches': matches})
+                return
+            decision = override.get('action') if override.get('name') == name else None
+            if decision:
+                self.set(duplicate_override=None, duplicate_pending=None)
             folder = core.ROOT / name
             if folder.exists():
                 base, stamp, n = name, time.strftime('%Y%m%d_%H%M%S'), 1
@@ -585,6 +604,10 @@ class Manager:
             queued = {'name':name,'folder':str(folder),'source':'',
                       'title_id':title['id'],'duration':title['duration'],
                       'expected_bytes':expected,'status':'estrazione'}
+            if decision:
+                queued['duplicate_action'] = decision
+                queued['duplicate_existing'] = override['existing']
+                self.attach_duplicate_metadata(queued, override['existing'])
             with self.lock:
                 self.set('Estrazione', 'Estraggo ' + name + '…', 0,
                          job=queued, queue=self.state['queue'] + [queued])
@@ -620,9 +643,19 @@ class Manager:
             with self.lock:
                 queued['source'] = str(source)
                 queued['size_gib'] = round(source.stat().st_size / 2**30, 1)
-                queued['status'] = 'pronto'
+                post_matches = duplicates.candidates(name, seconds(title),
+                                  [p for p in completed_files() if str(p) != queued.get('duplicate_existing')],
+                                  source=source, source_lookup=self.completed_source_lookup())
+                if post_matches and not decision:
+                    queued['status'] = 'duplicato'
+                    queued['duplicate_matches'] = post_matches
+                    self.set(duplicate_pending={'stage': 'extracted', 'name': name,
+                               'job_index': self.state['queue'].index(queued), 'matches': post_matches})
+                else:
+                    queued['status'] = 'pronto'
                 jobs = self.state['queue']
-            self.set('In attesa', name+' estratto. Inserisci il prossimo DVD oppure avvia la compressione.',
+            self.set('Possibile duplicato' if queued['status'] == 'duplicato' else 'In attesa',
+                     name+(' estratto: scegli come gestire il duplicato.' if queued['status'] == 'duplicato' else ' estratto. Inserisci il prossimo DVD oppure avvia la compressione.'),
                      0,job=None,queue=jobs)
             notify('X99 Ripper: '+name+' estratto; '+str(sum(j['status']=='pronto' for j in jobs))+' film in attesa.')
         except Exception as e:
@@ -635,6 +668,87 @@ class Manager:
             notify('X99 Ripper: serve attenzione. '+str(e))
         finally:
             with self.lock: self.busy = False
+
+    def choose_duplicate(self, action, existing, confirm_name):
+        if action not in ('cancel', 'alternative', 'replace'):
+            return False
+        with self.lock:
+            pending = self.state.get('duplicate_pending')
+            if not pending or pending['name'] != confirm_name:
+                return False
+            if action != 'cancel' and existing not in [item['path'] for item in pending['matches']]:
+                return False
+            if pending['stage'] == 'disc':
+                self.set(duplicate_pending=None, duplicate_override=None)
+                if action == 'cancel':
+                    self.last_media = True
+                    self.set('Annullato', 'DVD non acquisito. Rimuovilo dal lettore.')
+                    return True
+                self.set(duplicate_override={'name': pending['name'], 'action': action, 'existing': existing})
+                return self.start_scan()
+            index = pending['job_index']
+            if not 0 <= index < len(self.state['queue']): return False
+            job = self.state['queue'][index]
+            if job['status'] != 'duplicato' or job['name'] != confirm_name: return False
+            job['status'] = 'annullato' if action == 'cancel' else 'pronto'
+            if action != 'cancel':
+                job['duplicate_action'] = action
+                job['duplicate_existing'] = existing
+                job['auto_encode'] = True
+                self.attach_duplicate_metadata(job, existing)
+            self.set('In attesa', 'Scelta duplicato registrata.', duplicate_pending=None, queue=self.state['queue'])
+        if action != 'cancel': self.start_encoding(auto_only=True)
+        return True
+
+    @staticmethod
+    def attach_duplicate_metadata(job, existing):
+        info = {**film_library.read(Path(existing)), **(job.get('catalog_metadata') or {})}
+        if job.get('catalog_title'):
+            info['title'] = job['catalog_title']
+            info['year'] = job.get('catalog_year')
+        if info.get('title'):
+            job['catalog_title'] = info['title']
+            job['catalog_year'] = info.get('year')
+            job['original_language'] = info.get('original_language', '')
+            job['catalog_metadata'] = {**info, 'version_label': 'DVD/Blu-ray · ' +
+                       (job.get('duration') or 'durata da verificare') + ' · ' + job['name']}
+
+    def finalize_replacement(self, index, confirm_name, confirm_existing):
+        """Archive the previous version only after explicit, second confirmation."""
+        with self.lock:
+            if not 0 <= index < len(self.state['queue']): return False
+            job = self.state['queue'][index]
+            if (job.get('status') != 'completato' or job.get('duplicate_action') != 'replace'
+                    or job.get('name') != confirm_name or job.get('duplicate_existing') != confirm_existing
+                    or job.get('replacement_archived') or job.get('catalog_error')):
+                return False
+            new = Path(job.get('output') or '')
+            old = Path(confirm_existing)
+            if (not new.is_file() or not film_library.read(new).get('title')
+                    or not completed_file(old.relative_to(COMPLETED_DIR)) == old.resolve()):
+                return False
+            if old == new: return False
+            archive_root = core.STATE / 'archived-films'
+            archive_root.mkdir(parents=True, exist_ok=True)
+            if archive_root.stat().st_dev != old.stat().st_dev:
+                raise RuntimeError('Archivio su un altro disco: sostituzione annullata.')
+            target = archive_root / (old.parent.name + '-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6])
+            if old.parent != COMPLETED_DIR and old.parent.is_relative_to(COMPLETED_DIR) and len(list(old.parent.glob('*_H265.mkv'))) == 1:
+                old.parent.rename(target)
+            else:
+                target.mkdir()
+                old.rename(target / old.name)
+                for name in ('discflow-film.json', 'movie.nfo', 'poster.jpg'):
+                    companion = old.parent / name
+                    if companion.is_file() and not companion.is_symlink():
+                        companion.rename(target / name)
+            job['replacement_archived'] = str(target)
+            for other in self.state['queue']:
+                if other.get('output') == str(old):
+                    other['status'] = 'archiviato'
+                    other['output'] = str(target / old.name)
+            self.set(log='Versione precedente archiviata in ' + str(target), queue=self.state['queue'])
+        return True
 
     def workflow_recovery(self):
         """Modalità recupero: ddrescue copia il disco in immagine, MakeMKV estrae dall'immagine."""
@@ -654,6 +768,15 @@ class Manager:
             except (OSError, subprocess.SubprocessError):
                 label = ''
             name = core.safe_name(label or 'Recupero_' + time.strftime('%Y%m%d_%H%M'))
+            matches = duplicates.candidates(name, None, completed_files())
+            override = self.state.get('duplicate_override') or {}
+            if matches and override.get('name') != name:
+                self.set('Possibile duplicato', 'Controlla il film già presente prima del recupero.', 0,
+                         duplicate_pending={'stage': 'disc', 'name': name, 'matches': matches})
+                return
+            decision = override.get('action') if override.get('name') == name else None
+            if decision:
+                self.set(duplicate_override=None, duplicate_pending=None)
             folder = core.ROOT / name
             if folder.exists():
                 base, stamp, n = name, time.strftime('%Y%m%d_%H%M%S'), 1
@@ -669,6 +792,10 @@ class Manager:
             queued = {'name': name, 'folder': str(folder), 'source': '',
                       'title_id': None, 'duration': '', 'expected_bytes': 0,
                       'status': 'recupero', 'recovery': {}}
+            if decision:
+                queued['duplicate_action'] = decision
+                queued['duplicate_existing'] = override['existing']
+                self.attach_duplicate_metadata(queued, override['existing'])
             with self.lock:
                 self.set('Recupero', 'Copio il disco con ddrescue · ' + name + '…', 0,
                          job=queued, queue=self.state['queue'] + [queued])
@@ -735,11 +862,21 @@ class Manager:
                 queued['source'] = str(source)
                 queued['size_gib'] = round(source.stat().st_size / 2**30, 1)
                 queued['recovery_bad_gib'] = round(stats['bad'] / 2**30, 2)
-                queued['status'] = 'pronto'
+                post_matches = duplicates.candidates(name, queued['duration'] and seconds(title),
+                                  [p for p in completed_files() if str(p) != queued.get('duplicate_existing')],
+                                  source=source, source_lookup=self.completed_source_lookup())
+                if post_matches and not decision:
+                    queued['status'] = 'duplicato'
+                    queued['duplicate_matches'] = post_matches
+                    self.set(duplicate_pending={'stage': 'extracted', 'name': name,
+                               'job_index': self.state['queue'].index(queued), 'matches': post_matches})
+                else:
+                    queued['status'] = 'pronto'
                 queued.pop('recovery', None)
                 jobs = self.state['queue']
-            self.set('In attesa', name + ' recuperato. ' + recover.summary(stats)
-                     + ' Inserisci il prossimo DVD oppure avvia la compressione.',
+            self.set('Possibile duplicato' if queued['status'] == 'duplicato' else 'In attesa',
+                     name + ' recuperato. ' + recover.summary(stats)
+                     + (' Scegli come gestire il duplicato.' if queued['status'] == 'duplicato' else ' Inserisci il prossimo DVD oppure avvia la compressione.'),
                      0, job=None, queue=jobs)
             notify('X99 Ripper: ' + name + " recuperato dall'immagine; "
                    + str(sum(j['status'] == 'pronto' for j in jobs)) + ' film in attesa.')
@@ -847,6 +984,12 @@ class Manager:
             job['catalog_year'] = year or None
             job.pop('catalog_metadata', None)
             job.pop('auto_encode', None)
+            matches = duplicates.candidates(title, job.get('duration_seconds'), completed_files(), year=year or None)
+            if matches and not job.get('duplicate_action'):
+                job['status'] = 'duplicato'
+                job['duplicate_matches'] = matches
+                self.set(duplicate_pending={'stage': 'extracted', 'name': job['name'],
+                           'job_index': index, 'matches': matches})
             self.set(queue=self.state['queue'])
         return True
 
@@ -862,9 +1005,18 @@ class Manager:
             job['catalog_year'] = metadata['year']
             job['catalog_metadata'] = metadata
             job['original_language'] = metadata.get('original_language', '')
-            job['auto_encode'] = True
+            matches = duplicates.candidates(metadata['title'], job.get('duration_seconds'), completed_files(),
+                       year=metadata.get('year'), wikidata_id=metadata.get('wikidata_id', ''), imdb_id=metadata.get('imdb_id', ''))
+            if matches and not job.get('duplicate_action'):
+                job['status'] = 'duplicato'
+                job['duplicate_matches'] = matches
+                self.set(duplicate_pending={'stage': 'extracted', 'name': job['name'],
+                           'job_index': index, 'matches': matches})
+            else:
+                job['auto_encode'] = True
             self.set(queue=self.state['queue'])
-        self.start_encoding(auto_only=True)
+        if not matches or job.get('duplicate_action'):
+            self.start_encoding(auto_only=True)
         return True
 
     def delete_ready(self, index, confirm_name):
@@ -1108,6 +1260,12 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(page.encode(), 'text/html; charset=utf-8'); return
         if parsed.path == BASE+'/films/data':
             self.reply(json.dumps(film_data(), ensure_ascii=False).encode(), 'application/json'); return
+        if parsed.path == BASE+'/films/poster':
+            choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+            selected = completed_file(choices[0]) if len(choices) == 1 else None
+            image = film_library.poster(selected) if selected else None
+            if not image: self.send_error(404); return
+            self.reply(image.read_bytes(), 'image/jpeg'); return
         if parsed.path == BASE+'/films/playlist':
             choices = urllib.parse.parse_qs(parsed.query).get('path', [])
             selected = completed_file(choices[0]) if len(choices) == 1 else None
@@ -1210,6 +1368,18 @@ class Handler(BaseHTTPRequestHandler):
         if not secrets.compare_digest(self.headers.get('X-Ripper-Token',''),TOKEN):
             self.send_error(403); return
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == BASE+'/films/poster':
+            try:
+                choices = urllib.parse.parse_qs(parsed.query).get('path', [])
+                selected = completed_file(choices[0]) if len(choices) == 1 else None
+                if not selected: raise ValueError('Film non trovato.')
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 10 * 2**20: raise ValueError('Copertina troppo grande: massimo 10 MB.')
+                film_library.save_poster(selected, self.rfile.read(size), self.headers.get('Content-Type', ''))
+                self.reply(json.dumps({'saved': True}).encode(), 'application/json')
+            except (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+                self.reply_error(400, str(exc))
+            return
         if parsed.path == BASE+'/video/import':
             staged = None
             if not UPLOAD_LOCK.acquire(blocking=False):
@@ -1289,6 +1459,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(json.dumps({'path': renamed.relative_to(COMPLETED_DIR).as_posix()}, ensure_ascii=False).encode(), 'application/json')
             except (ValueError, KeyError, FileExistsError, OSError) as exc: self.reply_error(400, str(exc))
             return
+        if self.path == BASE+'/duplicate/choose':
+            try:
+                payload = self.read_json()
+                ok = manager.choose_duplicate(payload['action'], payload.get('existing', ''), payload['name'])
+            except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
+                ok = False
+            self.reply(json.dumps({'started': ok}).encode(), 'application/json'); return
+        if self.path.startswith(BASE+'/duplicate/finalize/'):
+            try:
+                payload = self.read_json()
+                ok = manager.finalize_replacement(int(self.path.rsplit('/', 1)[1]),
+                              payload['name'], payload['existing'])
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError, json.JSONDecodeError):
+                ok = False
+            self.reply(json.dumps({'started': ok}).encode(), 'application/json'); return
         if self.path == BASE+'/scan':ok=manager.start_scan()
         elif self.path == BASE+'/encode':ok=manager.start_encoding()
         elif self.path == BASE+'/retry':ok=manager.retry_errors()

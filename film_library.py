@@ -1,8 +1,10 @@
 """Local film catalog and optional, user-reviewed Wikidata lookup."""
 import json
 import difflib
+import os
 import re
 import subprocess
+import tempfile
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -210,6 +212,62 @@ def read(path):
         return {}
 
 
+def poster(path):
+    """Return only a local, regular Jellyfin poster for this film."""
+    image = path.parent / 'poster.jpg'
+    return image if image.is_file() and not image.is_symlink() else None
+
+
+def save_poster(path, image, image_type):
+    """Decode the supplied image and atomically publish a JPEG poster."""
+    if image_type not in ('image/jpeg', 'image/png', 'image/webp') or not 0 < len(image) <= 10 * 2**20:
+        raise ValueError('Scegli un’immagine JPG, PNG o WebP fino a 10 MB.')
+    signatures = {'image/jpeg': image.startswith(b'\xff\xd8\xff'),
+                  'image/png': image.startswith(b'\x89PNG\r\n\x1a\n'),
+                  'image/webp': image.startswith(b'RIFF') and image[8:12] == b'WEBP'}
+    if not signatures[image_type]:
+        raise ValueError('Il contenuto non corrisponde al formato dichiarato.')
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('Film non trovato.')
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix='.poster-') as temporary:
+        source = Path(temporary) / 'originale'
+        output = Path(temporary) / 'poster.jpg'
+        source.write_bytes(image)
+        probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                                '-show_entries', 'stream=width,height', '-of', 'json', str(source)],
+                               capture_output=True, text=True, timeout=15)
+        streams = json.loads(probe.stdout).get('streams', []) if probe.returncode == 0 else []
+        if not streams or not all(50 <= int(streams[0].get(key, 0)) <= 8000 for key in ('width', 'height')):
+            raise ValueError('Immagine non valida o dimensioni fuori limite.')
+        conversion = subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-i', str(source),
+                                     '-frames:v', '1', '-q:v', '2', str(output)],
+                                    capture_output=True, text=True, timeout=30)
+        if conversion.returncode or not output.is_file() or output.stat().st_size > 15 * 2**20:
+            raise ValueError('Non riesco a preparare la copertina: ' + conversion.stderr[-160:])
+        destination = path.parent / 'poster.jpg'
+        if destination.is_symlink():
+            raise ValueError('La copertina esistente è un collegamento: controllala manualmente.')
+        os.replace(output, destination)
+    nfo = path.parent / 'movie.nfo'
+    if nfo.is_file() and not nfo.is_symlink():
+        try:
+            tree = ET.parse(nfo)
+            root = tree.getroot()
+            if root.findtext('discflow') == '1':
+                for thumb in root.findall('thumb'):
+                    root.remove(thumb)
+                with tempfile.NamedTemporaryFile(dir=nfo.parent, prefix='.movie-', suffix='.nfo', delete=False) as tmp:
+                    temporary_nfo = Path(tmp.name)
+                try:
+                    tree.write(temporary_nfo, encoding='utf-8', xml_declaration=True)
+                    os.replace(temporary_nfo, nfo)
+                finally:
+                    temporary_nfo.unlink(missing_ok=True)
+        except (OSError, ET.ParseError):
+            pass
+    return destination
+
+
 def safe_title(title):
     title = title.strip()
     if not title or len(title) > 120 or any(ord(c) < 32 or c in '/\\<>|?*' for c in title):
@@ -235,8 +293,21 @@ def save(path, metadata):
             'wikidata_id': metadata.get('wikidata_id', ''),
             'imdb_id': metadata.get('imdb_id', ''),
             'original_language': metadata.get('original_language', ''),
+            'version_label': metadata.get('version_label', ''),
             'cover_url': metadata.get('cover_url', ''), 'cover_source': metadata.get('cover_source', ''),
             'source': metadata.get('source', 'manuale')}
+    source_file = next((p for p in path.parent.glob('*.mkv')
+                        if p != path and not p.name.endswith('_H265.mkv') and p.is_file() and not p.is_symlink()), None)
+    if source_file:
+        data['source_filename'] = source_file.name
+    try:
+        probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                                '-of', 'default=noprint_wrappers=1:nokey=1', str(path)],
+                               capture_output=True, text=True, timeout=20)
+        if probe.returncode == 0:
+            data['duration_seconds'] = round(float(probe.stdout.strip()))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
     nfo = path.parent / 'movie.nfo'
     if nfo.exists():
         try:
@@ -260,7 +331,7 @@ def save(path, metadata):
         ET.SubElement(movie, 'imdbid').text = data['imdb_id']
     if data['wikidata_id']:
         ET.SubElement(movie, 'uniqueid', type='wikidata').text = data['wikidata_id']
-    if data['cover_url']:
+    if data['cover_url'] and not poster(path):
         ET.SubElement(movie, 'thumb').text = data['cover_url']
     payload = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8') + b'\n'
     json_tmp = sidecar(path).with_suffix('.json.tmp')
