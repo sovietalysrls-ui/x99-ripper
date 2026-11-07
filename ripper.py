@@ -908,6 +908,8 @@ class App:
                         self.status.set('MakeMKV ha iniziato a scrivere il film sul Samsung.')
                     elif data.startswith('PRGV:'):
                         self.status.set('MakeMKV sta leggendo il DVD.')
+                    elif data.startswith(('Cerco i titoli ·','Estrazione · tentativo')):
+                        self.status.set(data)
                 elif typ=='warning':self.read_warning=data;self.append('AVVISO '+data)
                 elif typ=='scan':
                     self.scan_busy=False;t,label,kind,properties,tail,rc,license_error=data
