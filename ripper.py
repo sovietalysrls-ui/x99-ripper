@@ -169,7 +169,9 @@ def sub_choices(meta):
 
 def audio_plan(meta, chosen):
     aa=tracks(meta,'audio')
-    if not chosen:raise ValueError('Nessuna traccia audio disponibile.')
+    if not chosen:
+        if aa: raise ValueError('Nessuna traccia audio selezionata.')
+        return []
     plan=[]
     for index in chosen:
         if not 1<=index<=len(aa):raise ValueError('Indice audio non valido.')
@@ -188,23 +190,29 @@ def audio_plan(meta, chosen):
     return plan
 
 
-def hb_command(source, output, crop, plan, subs, encoder='x265_10bit'):
-    if not re.fullmatch(r'\d+:\d+:\d+:\d+', crop):
+def hb_command(source, output, crop, plan, subs, encoder='x265_10bit', deinterlace='off'):
+    if crop is not None and not re.fullmatch(r'\d+:\d+:\d+:\d+', crop):
         raise ValueError('Crop: usare top:bottom:left:right, quattro numeri.')
     if encoder not in ('x265_10bit', 'nvenc_h265_10bit'):
         raise ValueError('Encoder video non supportato.')
+    if deinterlace not in ('off', 'auto', 'on'):
+        raise ValueError('Deinterlacciamento non valido.')
     preset = 'slow' if encoder == 'x265_10bit' else 'medium'
     quality = '22' if encoder == 'x265_10bit' else '28'
     cmd = HB + ['-i', str(source), '-o', str(output), '-f', 'av_mkv',
         '-e', encoder, '--encoder-preset', preset, '-q', quality,
-        '--crop-mode', 'custom', '--crop', crop, '-m',
-        '-a', ','.join(str(x['index']) for x in plan),
-        '-E', ','.join(x['encoder'] for x in plan),
-        '-B', ','.join(x['bitrate'] for x in plan),
-        '-6', ','.join(x['mixdown'] for x in plan),
-        '--audio-fallback', 'none',
-        '-s', ','.join(map(str, subs)) if subs else 'none',
-        '--subtitle-burned=none', '--subtitle-default=none']
+        '--crop-mode', 'custom' if crop is not None else 'auto', '-m']
+    if crop is not None: cmd += ['--crop', crop]
+    if plan:
+        cmd += ['-a', ','.join(str(x['index']) for x in plan),
+                '-E', ','.join(x['encoder'] for x in plan),
+                '-B', ','.join(x['bitrate'] for x in plan),
+                '-6', ','.join(x['mixdown'] for x in plan), '--audio-fallback', 'none']
+    else: cmd += ['-a', 'none']
+    cmd += ['-s', ','.join(map(str, subs)) if subs else 'none',
+            '--subtitle-burned=none', '--subtitle-default=none']
+    if deinterlace == 'auto': cmd += ['--comb-detect=default', '--bwdif=default']
+    elif deinterlace == 'on': cmd += ['--bwdif=default']
     return cmd
 
 
@@ -226,9 +234,9 @@ def verify(source_meta, outpath, expected_subs, plan):
             raise RuntimeError('Codec audio diverso dalla selezione.')
         if expected['encoder'].startswith('copy:') and actual.get('channels')!=expected['channels']:
             raise RuntimeError('Numero canali diverso dalla sorgente in passthrough.')
-    if not a[0].get('disposition',{}).get('default') or any(x.get('disposition',{}).get('default') for x in a[1:]):
+    if plan and (not a[0].get('disposition',{}).get('default') or any(x.get('disposition',{}).get('default') for x in a[1:])):
         raise RuntimeError('Audio predefinito errato.')
-    if any(x['language']=='ita' for x in plan) and lang(a[0])!='ita':
+    if plan and any(x['language']=='ita' for x in plan) and lang(a[0])!='ita':
         raise RuntimeError('Italiano non impostato come audio predefinito.')
     if len(s) != len(expected_subs) or any(x.get('disposition', {}).get('default') for x in s):
         raise RuntimeError('Numero sottotitoli o flag default errato.')

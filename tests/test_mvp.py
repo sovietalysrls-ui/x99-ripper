@@ -114,7 +114,72 @@ class QueueTests(unittest.TestCase):
             (preview / 'browser.mp4').write_bytes(b'd' * 20)
             with mock.patch.object(web.shutil, 'disk_usage', return_value=mock.Mock(free=300)):
                 values = web.measure_storage(root, preview)
-            self.assertEqual(values, {'sources': 100, 'work': 60, 'final': 80, 'free': 300})
+            self.assertEqual(values, {'sources': 100, 'work': 60, 'final': 80, 'iso': 0, 'free': 300})
+
+    def test_video_import_accepts_container_by_probe_and_keeps_managed_copy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'media'; root.mkdir()
+            staged = Path(temp) / 'upload.part'; staged.write_bytes(b'video data')
+            manager = object.__new__(web.Manager)
+            manager.lock = threading.RLock()
+            manager.state = {'queue': []}
+            manager.busy = False
+            manager.desktop_active = lambda: False
+            manager.set = lambda *args, **values: manager.state.update(values)
+            metadata = {'format': {'duration': '72.5'},
+                        'streams': [{'codec_type': 'video', 'width': 536, 'height': 416}]}
+            with mock.patch.object(web.core, 'ROOT', root), mock.patch.object(web.core, 'probe', return_value=metadata):
+                job = manager.import_video(staged, 'Registrazione vecchia.avi', 'none', 'auto')
+            self.assertFalse(staged.exists())
+            self.assertTrue(Path(job['source']).is_file())
+            self.assertEqual(job['source_type'], 'file')
+            self.assertEqual(job['crop_mode'], 'none')
+            self.assertEqual(job['deinterlace'], 'auto')
+            self.assertEqual(job['status'], 'pronto')
+            self.assertEqual(len(manager.state['queue']), 1)
+
+    def test_video_import_rejects_nonvideo_without_moving_upload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'media'; root.mkdir()
+            staged = Path(temp) / 'upload.part'; staged.write_bytes(b'not a video')
+            manager = object.__new__(web.Manager)
+            manager.lock = threading.RLock()
+            manager.state = {'queue': []}
+            manager.busy = False
+            manager.desktop_active = lambda: False
+            metadata = {'format': {'duration': '10'}, 'streams': [{'codec_type': 'audio'}]}
+            with mock.patch.object(web.core, 'ROOT', root), mock.patch.object(web.core, 'probe', return_value=metadata):
+                with self.assertRaises(ValueError): manager.import_video(staged, 'test.mp4')
+            self.assertTrue(staged.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_browser_upload_streams_video_into_queue(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); content = b'example video' * 1000
+            manager = object.__new__(web.Manager)
+            manager.lock = threading.RLock(); manager.state = {'queue': []}
+            manager.busy = False; manager.desktop_active = lambda: False
+            manager.set = lambda *args, **values: manager.state.update(values)
+            metadata = {'format': {'duration': '30'},
+                        'streams': [{'codec_type': 'video', 'width': 720, 'height': 576}]}
+            with mock.patch.object(web, 'manager', manager), \
+                 mock.patch.object(web.core, 'ROOT', root), \
+                 mock.patch.object(web.core, 'probe', return_value=metadata):
+                server = ThreadingHTTPServer(('127.0.0.1', 0), web.Handler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    url = f'http://127.0.0.1:{server.server_port}/ripper/video/import?name=Film.avi&crop=none&deinterlace=on'
+                    request = urllib.request.Request(url, data=content,
+                        headers={'X-Ripper-Token': web.TOKEN,
+                                 'Content-Type': 'application/octet-stream'})
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        self.assertTrue(json.load(response)['started'])
+                finally:
+                    server.shutdown(); server.server_close(); thread.join()
+            job = manager.state['queue'][0]
+            self.assertEqual(Path(job['source']).read_bytes(), content)
+            self.assertEqual(job['deinterlace'], 'on')
 
     def test_imprecise_title_finds_italian_film_without_suggesting_people(self):
         def wikipedia(req, timeout):
@@ -378,6 +443,19 @@ class QueueTests(unittest.TestCase):
 
 
 class MediaTests(unittest.TestCase):
+    def test_unified_video_output_and_selective_deinterlacing(self):
+        cmd = ripper.hb_command('source.avi', 'finale.mkv', None, [], [],
+                                'nvenc_h265_10bit', 'auto')
+        self.assertEqual(cmd[cmd.index('--crop-mode') + 1], 'auto')
+        self.assertEqual(cmd[cmd.index('-a') + 1], 'none')
+        self.assertIn('--comb-detect=default', cmd)
+        self.assertIn('--bwdif=default', cmd)
+        self.assertEqual(cmd[cmd.index('-e') + 1], 'nvenc_h265_10bit')
+        no_filters = ripper.hb_command('source.mp4', 'finale.mkv', '0:0:0:0', [], [],
+                                       'nvenc_h265_10bit', 'off')
+        self.assertNotIn('--bwdif=default', no_filters)
+        self.assertEqual(no_filters[no_filters.index('--crop') + 1], '0:0:0:0')
+
     def test_integrity_checks_two_video_samples(self):
         with mock.patch.object(ripper.subprocess, 'run') as run:
             run.return_value.returncode = 0

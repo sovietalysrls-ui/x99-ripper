@@ -198,6 +198,14 @@ Per notifiche Telegram, apri il terminale dell'OptiPlex ed esegui `python3 ~/.lo
 
 Puoi provare il percorso di scansione e compressione con **Importa MKV esistente**, senza inserire un disco. La cartella dell'MKV importato resta intatta.
 
+## Importazione di file video (v0.20.0)
+
+Nella pagina web dell'OptiPlex, **Importa un video** accetta file scelti dal dispositivo da cui apri DiscFlow. Il formato di partenza non viene deciso dall'estensione: `ffprobe` deve riconoscere esattamente una traccia video e una durata valida. Funzionano, per esempio, AVI, MP4, MKV e MOV; possono essere importati anche video senza audio. Il file sul dispositivo resta intatto. DiscFlow conserva una copia nella propria cartella, la mette in coda e, quando premi **Avvia compressione**, produce un solo formato finale: MKV con video H.265 a 10 bit. Il metodo CPU/GPU è quello selezionato nella dashboard.
+
+Prima del caricamento scegli **Bordi neri**: automatico (HandBrake decide se tagliare) oppure conserva tutto. **Righe dell'immagine** offre automatico (rilevamento e deinterlacciamento solo dei fotogrammi interessati), sempre e mai. Per materiale PAL interlacciato come Project UFO, l'opzione automatica applica `comb-detect` e `bwdif`. Non sono applicati filtri di nitidezza o schiarimento. La copia caricata, dopo la verifica del finale, può essere rimossa manualmente e viene rimossa automaticamente dopo 48 ore; il file originale sul dispositivo non viene toccato.
+
+Il browser carica un file per volta. Il server richiede spazio per il file più 4 GiB di margine e rifiuta nuovi caricamenti mentre il lettore ottico è impegnato. La pagina mostra l'avanzamento del trasferimento. Per file molto grandi la velocità dipende dalla rete e dal proxy: verificare il limite di caricamento del proxy nell'installazione reale. Il recupero DVD in corso non richiede né consente un riavvio per attivare questa funzione.
+
 ## Modalità recupero per dischi rovinati
 
 Per DVD graffiati, opachi o con l'etichetta che ha rovinato il supporto, la modalità recupero copia prima l'intero disco in un'immagine con GNU ddrescue e poi estrae il titolo dall'immagine con MakeMKV, invece di leggere direttamente il lettore. Nella pagina web si attiva con il selettore «Disco rovinato» nella sezione Lettore DVD; nell'app desktop con la casella «Recupero disco rovinato» accanto a Estrai il film. La scelta resta attiva finché non la si cambia.

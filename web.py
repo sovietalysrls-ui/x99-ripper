@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -38,6 +39,7 @@ COMPLETED_DIR = Path(os.environ.get('X99_RIPPER_COMPLETED_DIR') or core.ROOT).ex
 AUTO_CATALOG_LOCK = threading.Lock()
 STORAGE_LOCK = threading.Lock()
 STORAGE_CACHE = (0, None)
+UPLOAD_LOCK = threading.Lock()
 SOURCE_RETENTION_SECONDS = 48 * 3600
 READ_ATTEMPTS = 3
 READ_RETRY_DELAY = 20
@@ -152,9 +154,14 @@ def measure_storage(root, preview_dir):
         except OSError:
             pass
     for path in root.rglob('*'):
+        if path.parent.name == '.uploads' and path.suffix == '.part':
+            add(path, 'work'); continue
+        if re.fullmatch(r'.+_import_[0-9a-f]{10}', path.parent.name) and path.name.startswith('Originale_'):
+            add(path, 'sources'); continue
         if path.suffix.lower() == '.iso':
             add(path, 'iso'); continue
-        if path.suffix.lower() != '.mkv': continue
+        if path.suffix.lower() not in ('.mkv', '.mp4', '.avi', '.mov', '.mpeg', '.mpg',
+                                       '.m2ts', '.mts', '.ts', '.webm', '.wmv', '.vob'): continue
         name = path.name.lower()
         if name.endswith('_h265.mkv'):
             add(path, 'final')
@@ -782,6 +789,46 @@ class Manager:
             self.set(recovery_mode=value)
         return True
 
+    def import_video(self, staged, filename, crop_mode='auto', deinterlace='auto'):
+        """Register a browser-uploaded video for the existing encoding queue."""
+        if crop_mode not in ('auto', 'none') or deinterlace not in ('auto', 'on', 'off'):
+            raise ValueError('Opzioni video non valide.')
+        if not isinstance(filename, str) or not filename or len(filename) > 220:
+            raise ValueError('Nome del video non valido.')
+        if Path(filename).name != filename or any(ord(c) < 32 for c in filename):
+            raise ValueError('Il nome del file contiene un percorso o caratteri non validi.')
+        staged = Path(staged)
+        if staged.is_symlink() or not staged.is_file():
+            raise ValueError('Video caricato non trovato.')
+        meta = core.probe(staged)
+        videos = core.tracks(meta, 'video')
+        if len(videos) != 1 or not videos[0].get('width') or not videos[0].get('height'):
+            raise ValueError('Serve un file con una sola traccia video leggibile.')
+        try: duration = float(meta['format']['duration'])
+        except (KeyError, TypeError, ValueError): raise ValueError('Durata del video non leggibile.')
+        if duration < 1: raise ValueError('Video troppo breve o incompleto.')
+        name = core.safe_name(Path(filename).stem)
+        suffix = Path(filename).suffix.lower()
+        if len(suffix) > 12 or not re.fullmatch(r'\.[a-z0-9]+', suffix or '.x'):
+            suffix = ''
+        folder = core.ROOT / (name + '_import_' + uuid.uuid4().hex[:10])
+        source = folder / ('Originale_' + name[:55] + suffix)
+        with self.lock:
+            if self.busy or self.desktop_active():
+                raise RuntimeError('Il lettore è occupato: riprova dopo l’acquisizione del disco.')
+            if folder.exists(): raise FileExistsError('Cartella di importazione già presente.')
+            folder.mkdir()
+            staged.replace(source)
+            job = {'name': name, 'folder': str(folder), 'source': str(source),
+                   'title_id': None, 'duration_seconds': round(duration),
+                   'size_gib': round(source.stat().st_size / 2**30, 2),
+                   'status': 'pronto', 'managed_source': True, 'source_type': 'file',
+                   'crop_mode': crop_mode, 'deinterlace': deinterlace,
+                   'original_filename': filename}
+            self.set('In attesa', name + ' importato. Avvia la compressione.', 0,
+                     queue=self.state['queue'] + [job])
+        return job
+
     def set_catalog(self, index, title, year):
         if not isinstance(title, str):
             return False
@@ -844,7 +891,7 @@ class Manager:
             if self.busy or self.encoding or self.desktop_active(): return False
             if not 0 <= index < len(self.state['queue']): return False
             job = self.state['queue'][index]
-            if job.get('status') != 'completato' or job.get('name') != confirm_name or 'title_id' not in job:
+            if job.get('status') != 'completato' or job.get('name') != confirm_name or not (job.get('title_id') is not None or job.get('managed_source')):
                 return False
             if automatic and time.time() - float(job.get('verified_at') or time.time()) < SOURCE_RETENTION_SECONDS:
                 return False
@@ -860,7 +907,7 @@ class Manager:
             job['source_removed'] = True
             job['source_removed_at'] = time.time()
             job['size_gib'] = round(output.stat().st_size / 2**30, 1)
-            self.set(detail=confirm_name + ': MKV originale rimosso; film finale conservato.',
+            self.set(detail=confirm_name + ': File originale rimosso; video finale conservato.',
                      log=confirm_name + ': originale rimosso ' + ('dopo 48 ore.' if automatic else 'su conferma.'),
                      queue=self.state['queue'])
             global STORAGE_CACHE
@@ -871,7 +918,7 @@ class Manager:
     def cleanup_due_sources(self):
         with self.lock:
             due = [(index, job['name']) for index, job in enumerate(self.state['queue'])
-                   if job.get('status') == 'completato' and 'title_id' in job
+                   if job.get('status') == 'completato' and (job.get('title_id') is not None or job.get('managed_source'))
                    and job.get('verified_at') and not job.get('source_removed')
                    and time.time() - float(job['verified_at']) >= SOURCE_RETENTION_SECONDS]
         for index, name in due:
@@ -979,11 +1026,14 @@ class Manager:
                         except (OSError, ValueError, KeyError, TimeoutError):
                             pass
                     plan=core.audio_plan(meta,core.audio_choices(meta, job.get('original_language')))
-                    scan=subprocess.run(core.HB+['-i',str(source),'--scan','--previews','10:0'],
-                                        capture_output=True,text=True,timeout=240)
-                    crop=core.CROP.search(scan.stdout+scan.stderr)
-                    if not crop: raise RuntimeError('Crop automatico non rilevato.')
-                    crop_value=':'.join(crop.groups())
+                    if job.get('source_type') == 'file':
+                        crop_value = None if job.get('crop_mode') == 'auto' else '0:0:0:0'
+                    else:
+                        scan=subprocess.run(core.HB+['-i',str(source),'--scan','--previews','10:0'],
+                                            capture_output=True,text=True,timeout=240)
+                        crop=core.CROP.search(scan.stdout+scan.stderr)
+                        if not crop: raise RuntimeError('Crop automatico non rilevato.')
+                        crop_value=':'.join(crop.groups())
                     out=folder/(name+'_H265.mkv')
                     partial=folder/(name+'_H265.parziale.mkv')
                     if out.exists() or partial.exists():
@@ -991,7 +1041,9 @@ class Manager:
                     if shutil.disk_usage(folder).free < max(4*2**30,source.stat().st_size//4):
                         raise RuntimeError('Spazio insufficiente per comprimere.')
                     self.set('Compressione',name+' · 0%',0,job=job)
-                    rc=self.run(core.hb_command(source,partial,crop_value,plan,subs,encoder),folder/'compressione.log',True)
+                    rc=self.run(core.hb_command(source,partial,crop_value,plan,subs,encoder,
+                                                job.get('deinterlace', 'off')),
+                                folder/'compressione.log',True)
                     if rc: raise RuntimeError('HandBrake terminato con codice '+str(rc))
                     self.set('Verifica','Controllo '+name+'…',99)
                     core.verify(meta,partial,subs,plan)
@@ -1122,7 +1174,7 @@ class Handler(BaseHTTPRequestHandler):
                 queue = []
                 for job in manager.state['queue']:
                     item = dict(job)
-                    if item['status'] == 'completato' and 'title_id' in item:
+                    if item['status'] == 'completato' and (item.get('title_id') is not None or item.get('managed_source')):
                         item['source_present'] = Path(item.get('source') or '').is_file()
                     if item['status'] == 'recupero':
                         recovery = item.get('recovery') or {}
@@ -1157,6 +1209,44 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed(): return
         if not secrets.compare_digest(self.headers.get('X-Ripper-Token',''),TOKEN):
             self.send_error(403); return
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == BASE+'/video/import':
+            staged = None
+            if not UPLOAD_LOCK.acquire(blocking=False):
+                self.reply_error(409, 'Un altro video è in caricamento. Riprova quando ha finito.'); return
+            try:
+                if manager.busy or manager.desktop_active():
+                    raise RuntimeError('Acquisizione disco in corso: carica il video quando il lettore è libero.')
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 80 * 2**30:
+                    raise ValueError('Dimensione del video non valida o superiore a 80 GiB.')
+                if shutil.disk_usage(core.ROOT).free < size + 4 * 2**30:
+                    raise ValueError('Spazio insufficiente per caricare e comprimere il video.')
+                options = urllib.parse.parse_qs(parsed.query)
+                filename = options.get('name', [''])[0]
+                crop_mode = options.get('crop', ['auto'])[0]
+                deinterlace = options.get('deinterlace', ['auto'])[0]
+                if not filename or len(filename) > 220 or crop_mode not in ('auto', 'none') or deinterlace not in ('auto', 'on', 'off'):
+                    raise ValueError('Nome o opzioni del video non validi.')
+                incoming = core.ROOT / '.uploads'
+                incoming.mkdir(exist_ok=True)
+                staged = incoming / (uuid.uuid4().hex + '.part')
+                self.connection.settimeout(120)
+                with staged.open('xb') as output:
+                    remaining = size
+                    while remaining:
+                        chunk = self.rfile.read(min(4 * 2**20, remaining))
+                        if not chunk: raise ValueError('Caricamento interrotto; riprova.')
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                job = manager.import_video(staged, filename, crop_mode, deinterlace)
+                self.reply(json.dumps({'name': job['name'], 'started': True}, ensure_ascii=False).encode(), 'application/json')
+            except (ValueError, OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                self.reply_error(400, str(exc))
+            finally:
+                if staged is not None: staged.unlink(missing_ok=True)
+                UPLOAD_LOCK.release()
+            return
         if self.path == BASE+'/import/complete':
             try:
                 payload = self.read_json()
